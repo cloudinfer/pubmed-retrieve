@@ -263,6 +263,11 @@ for n, k in sorted(((txt.str.contains(p, regex=True, na=False).sum(), k) for k, 
      正确写法：`\bspect\b`（并用 `\bpet\b` 而非 `pet`）。
    - `\bus\b`（超声）会命中代词 us；`ai`/`ai` 会命中 "main""domain"。
    - `adc` 会命中 "advocacy" 等；建议 `\badc\b`。
+   - `oral`（口腔/头颈）会命中 **tem`poral`**（颞叶）、"temporal lobe" —— 真实案例：一次影像组学检索中
+     `oral` 使"头颈/口腔"桶从 36 篇虚高到 103 篇（占全量 25%）。正确写法：`\boral\b` 或 `oral squamous`。
+   - **经验规律：越短的解剖词越危险。** 三字母级（`us` / `ai` / `pet` / `oral`）几乎必然翻车，必须加 `\b`；
+     `prostate` / `renal` / `bladder` 等长词相对安全，但统一加 `\b` 成本极低，建议一律加。
+   - **自检方法**：若某桶占比异常高（如 >20%），把该桶拆成子关键词逐项计数，即可快速定位"凶手"词。
 3. **`str.contains` 含捕获组会触发 `UserWarning`**：用 `(?:...)` 非捕获组，或忽略该警告。
 4. **统计口径要写明**：分桶是**可多重归类**的（一篇文献可同时属于 CT 与深度学习），
    故各桶占比之和 **>100%**；务必在报告中标注，否则会被误读为互斥分类。
