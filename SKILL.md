@@ -1,6 +1,6 @@
 ---
 name: pubmed-retrieve
-description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to: clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, and produces a summary table.
+description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, and produces a summary table.
 ---
 
 # PubMed Retrieve Skill
