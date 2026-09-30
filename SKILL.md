@@ -7,6 +7,20 @@ description: Use whenever the user wants to search for or retrieve literature in
 
 根据用户需求生成 PubMed 检索式，调用 `scripts/` 下的脚本执行检索，并生成文献汇总表。
 
+## 路径约定
+
+本 skill 的脚本位于 **本 SKILL.md 所在目录**下的 `scripts/`。请以 skill 目录为基准定位脚本，不要硬编码 `.claude/skills/...` 这类路径。
+
+常见安装位置：
+
+| 环境 | skill 根目录 |
+|------|--------------|
+| WorkBuddy | `~/.workbuddy/skills/pubmed-retrieve/` |
+| Claude Code | `~/.claude/skills/pubmed-retrieve/` |
+| 项目级 | `<workspace>/.workbuddy/skills/pubmed-retrieve/` |
+
+下文记作 `{SKILL_DIR}`。**首次使用前请先用 Glob/Read 确认脚本真实位置**（例如 `Glob **/pubmed-retrieve/scripts/pubmed_cli.py`），再拼接绝对路径执行。
+
 ## 工作流程
 
 ### Phase 0: Python 环境检测
@@ -17,33 +31,63 @@ description: Use whenever the user wants to search for or retrieve literature in
 
 #### 检测步骤（按优先级）
 
-**1. 检测 conda / miniconda**（Windows 上最常见）：
+**1. WorkBuddy 托管 Python 虚拟环境（若在 WorkBuddy 中运行，首选）**
+
+WorkBuddy 会把依赖装在隔离的托管 venv 里，不污染用户系统环境。先检查是否已就绪：
+
+```bash
+# Windows
+PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"
+# macOS / Linux：PY="$HOME/.workbuddy/binaries/python/envs/default/bin/python"
+
+[ -x "$PY" ] && "$PY" -c "import requests, pandas; print('deps ok')"
+```
+
+若输出 `deps ok`，直接使用该解释器，**无需再安装任何依赖**，跳到 Phase 1。
+
+若 venv 不存在，先用托管解释器创建，再装依赖（用后台任务执行，避免前台超时中断）：
+
+```bash
+# 托管解释器版本号以本机实际安装为准，例如：
+#   ~/.workbuddy/binaries/python/versions/3.13.12/python.exe
+"$HOME/.workbuddy/binaries/python/versions/<version>/python.exe" \
+  -m venv "$HOME/.workbuddy/binaries/python/envs/default"
+
+"$HOME/.workbuddy/binaries/python/envs/default/Scripts/pip.exe" install requests pandas
+```
+
+> 依赖安装耗时约 20–40s，**建议用后台任务执行**（`run_in_background=true`）。
+> 若不确定托管解释器的具体版本目录，用 Glob 搜索 `binaries/python/versions/*/python.exe` 确认。
+
+**2. 检测 conda / miniconda**（Windows 上常见）：
 
 ```powershell
-# 检查常见安装路径
 Test-Path "$env:USERPROFILE\miniconda3\shell\condabin\conda-hook.ps1"
-# 或
 Get-Command conda -ErrorAction SilentlyContinue
 ```
 
-**2. 验证 Python 可用**：
+**3. 系统 Python**：
 
 ```bash
 python --version
+python -c "import requests, pandas; print('deps ok')"
 ```
 
-**3. 都不行 → 询问用户**：用 `AskUserQuestion` 告知未检测到 Python 环境，提供安装选项：
+**4. 都不行 → 询问用户**：用 `AskUserQuestion` 告知未检测到 Python 环境，提供安装选项：
 - "安装 Miniconda (推荐)" — https://docs.anaconda.com/miniconda/
 - "安装 Python" — https://www.python.org/downloads/
 - "取消"
 
-**4. 环境就绪后安装依赖**：
+**5. 通用依赖安装**（仅在 1–3 均不可用时）：
 
 ```bash
 pip install requests pandas
 # 如果 pip 不可用：
 python -m pip install requests pandas
 ```
+
+> 排查提示：系统 Python 报 `ModuleNotFoundError: No module named 'requests'` 属常见情况，
+> 优先切到 WorkBuddy 托管 venv（步骤 1），无需改动用户系统环境。
 
 ### Phase 1: 理解需求 → 生成检索式
 
@@ -61,6 +105,9 @@ python -m pip install requests pandas
 必须在执行检索前用 `AskUserQuestion` 确认大致范围，
 选项至少包括："近1年"、"近5年"、"近10年"、"不限时间范围"。
 
+用户已给出明确范围（如"近一个月""2020-2024"）时**不要再追问时间范围**，
+但仍需展示完整检索计划并确认后执行（见下）。
+
 #### 检索式生成规则
 
 1. **布尔逻辑**: 用 `AND` / `OR` / `NOT` (必须大写) 组合关键词，括号控制优先级
@@ -68,6 +115,23 @@ python -m pip install requests pandas
 3. **文献类型**: `clinical trial[pt]`、`review[pt]`、`"systematic review"[pt]`、`"randomized controlled trial"[pt]`
 4. **通配符**: `*` 进行词根扩展 (如 `Alzheimer*` 匹配 Alzheimer、Alzheimer's)
 5. **精确短语**: 双引号包裹 (如 `"machine learning"`)
+
+#### ⚠️ 布尔优先级陷阱（高频出错点）
+
+PubMed **不保证** `AND` 先于 `OR` 求值。**混用 `AND`/`OR` 时必须显式加括号**，否则语义会跑偏：
+
+```
+# ❌ 错误：意图是 (A 或 B 或 C) 且 D，实际可能被解析为 A OR B OR (C AND D)，结果虚高
+A OR B OR C AND D
+
+# ✅ 正确
+(A OR B OR C) AND D
+```
+
+另外：**先想清楚"同义词组"与"限定条件"的边界**。
+`("radiomics"[Title/Abstract] OR "radiomic"[Title/Abstract] ...)` 这类**纯同义词扩展通常不需要再 AND 领域词**——
+主题词本身已隐含领域（如 radiomics 必属医学影像），再加 `AND "medical imaging"` 会大量漏检。
+**宁可先跑一轮看数量级，再决定是否收紧**，不要一上手就叠限定。
 
 #### 检索式示例
 
@@ -81,13 +145,15 @@ diabetes AND exercise AND "physical activity"
 # 文献类型
 (Alzheimer* OR dementia) AND ("early diagnosis" OR "early detection") AND "systematic review"[pt]
 
+# 同义词扩展 + MeSH（推荐写法：同义词全括在一起）
+("radiomics"[Title/Abstract] OR "radiomic"[Title/Abstract] OR "radiogenomics"[Title/Abstract] OR "radiomics"[MeSH Terms])
+
 # 复杂组合
 (cancer OR neoplasm) AND immunotherapy[Title/Abstract] AND "clinical trial"[pt] NOT pediatric
 ```
 
-生成检索式后，向用户展示完整的检索计划（检索式 + 时间范围 + 最大结果数），等待确认后再执行检索。
-
-如果用户未提供时间范围，必须先确认再生成检索式。
+生成检索式后，向用户展示完整的检索计划（**检索式 + 时间范围 + 最大结果数**），
+用 `AskUserQuestion` 确认后再执行检索。
 
 ### Phase 2: 执行检索
 
@@ -96,28 +162,41 @@ diabetes AND exercise AND "physical activity"
 
 #### 执行步骤
 
-**Step 1**: 将检索式写入临时文件：
+**Step 1**: 用 Write 工具将检索式写入**当前 workspace** 的临时文件，例如
+`<workspace>/.workbuddy/tmp_query.txt`（内容为单行检索式，不要加换行或注释）。**不要**写到 `.claude/` 下。
 
+**Step 2**: 执行检索（根据 Phase 0 检测的环境选择命令，路径全部用绝对路径）：
+
+**WorkBuddy 托管 venv（首选）**：
 ```bash
-# 用 Write 工具写入 .claude/tmp_query.txt，内容为检索式
+cd "<workspace>" && \
+"$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe" \
+  "<SKILL_DIR>/scripts/pubmed_cli.py" \
+  -f "<workspace>/.workbuddy/tmp_query.txt" \
+  -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 \
+  -o "<workspace>/pubmed_results.csv"
 ```
-
-**Step 2**: 执行检索（根据 Phase 0 检测的环境选择命令）：
 
 **Windows（conda）**：
 ```powershell
-& "$env:USERPROFILE\miniconda3\shell\condabin\conda-hook.ps1" ; conda activate "$env:USERPROFILE\miniconda3" ; python .claude/skills/pubmed-retrieve/scripts/pubmed_cli.py -f .claude/tmp_query.txt -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o pubmed_results.csv
+& "$env:USERPROFILE\miniconda3\shell\condabin\conda-hook.ps1" ; conda activate "$env:USERPROFILE\miniconda3" ; python "<SKILL_DIR>/scripts/pubmed_cli.py" -f "<workspace>/.workbuddy/tmp_query.txt" -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o "<workspace>/pubmed_results.csv"
 ```
 
 **macOS / Linux（conda）**：
 ```bash
-source "$HOME/miniconda3/bin/activate" && python .claude/skills/pubmed-retrieve/scripts/pubmed_cli.py -f .claude/tmp_query.txt -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o pubmed_results.csv
+source "$HOME/miniconda3/bin/activate" && python "<SKILL_DIR>/scripts/pubmed_cli.py" -f "<workspace>/.workbuddy/tmp_query.txt" -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o "<workspace>/pubmed_results.csv"
 ```
 
 **无 conda（系统 Python）**：
 ```bash
-python .claude/skills/pubmed-retrieve/scripts/pubmed_cli.py -f .claude/tmp_query.txt -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o pubmed_results.csv
+python "<SKILL_DIR>/scripts/pubmed_cli.py" -f "<workspace>/.workbuddy/tmp_query.txt" -s "YYYY/MM/DD" -e "YYYY/MM/DD" -m 2000 -o "<workspace>/pubmed_results.csv"
 ```
+
+**Step 3**: 完成后删除临时检索式文件。
+
+> **执行提示**：几百条文献的详情抓取约需 20–60s（每 50 条一批，批间 0.4s 延迟），
+> 建议用后台任务运行并设定足够超时。若用 `| tail -N` 截断输出，**注意 tail 会吃掉开头的
+> 「检索概览 / 期刊分布 / 年份分布」段**——需要这些统计时请勿截断，或直接改为读取 CSV 自行统计。
 
 #### 参数说明
 
@@ -132,6 +211,17 @@ python .claude/skills/pubmed-retrieve/scripts/pubmed_cli.py -f .claude/tmp_query
 
 CLI 自动完成四步：搜索 PMID → 获取详情 → 保存 CSV → 打印汇总表。
 
+#### ⚠️ 日期字段语义：EDAT 而非 PDAT
+
+脚本使用 `datetype=edat`，即按**文献进入 PubMed 的入库日期**筛选，**不是期刊出版日期**。
+这直接影响"近一个月""近一年"这类需求的口径：
+
+- EDAT 命中数**远多于**同期正式出版量（含在线优先出版、预印后收录等）。
+- 一条记录可能标注 `Date` 为 2026 年，但 EDAT 落入检索窗口。
+- **必须在最终答复中明确说明口径**，并提示"与期刊正式出版月不完全一致"，避免用户误解。
+
+若用户明确要求按出版日期筛选，需改用 `datetype=pdat`（当前脚本未暴露该参数，需修改脚本或改用 E-utilities 直查）。
+
 ### Phase 3: 解读结果
 
 CLI 输出包含：
@@ -143,7 +233,67 @@ CLI 输出包含：
 
 同时生成 CSV 文件，包含全部字段：`Pmid, ISSN, ISSN_Type, Title, Authors, Journal, Date, Doi, Abstract`
 
-如用户需要进一步分析（筛选、统计、下载全文链接等），基于 CSV 或返回的结果数据继续处理。
+#### 3.1 基于 CSV 做主题/模态聚类（推荐增值步骤）
+
+命中量较大时（>100 篇），用关键词分桶给出分布表能显著提升可读性。
+**用 pandas 读 CSV，不要用 shell 文本工具**：
+
+```python
+import pandas as pd
+df = pd.read_csv("pubmed_results.csv")
+txt = (df["Title"].fillna("") + " " + df["Abstract"].fillna("")).str.lower()
+
+groups = {
+    "CT":          r"\bct\b|computed tomograph|cone-beam|cbct|dual-energy",
+    "MRI":         r"\bmri\b|magnetic resonance|multiparametric|\bdwi\b|\badc\b|t1 mapping",
+    "超声":         r"\bultrasound\b|ultrasonograph|elastograph|\bdoppler\b",
+    "深度学习":      r"deep learning|convolutional|\bcnn\b|transformer|neural network|u-net",
+    "传统机器学习":   r"machine learning|random forest|xgboost|nomogram|\bsvm\b|lasso",
+    "多中心/外部验证": r"multicent|multi-cent|external validation|generalizab|prospective",
+}
+for n, k in sorted(((txt.str.contains(p, regex=True, na=False).sum(), k) for k, p in groups.items()), reverse=True):
+    print(f"{n:4d} ({n/len(df)*100:5.1f}%)  {k}")
+```
+
+##### ⚠️ 关键词正则的两个高频踩坑
+
+1. **短词/缩写必须加 `\b` 词边界**：`\bct\b` 而非 `ct`（否则命中 "detect""factor"）。
+2. **子串陷阱——务必检查关键词会不会出现在无关常见词里**。真实案例：
+   - `spect` 会命中 **re`spect`ive / retro`spect`ive / per`spect`ive / expect**，导致"PET/SPECT"桶虚高数倍。
+     正确写法：`\bspect\b`（并用 `\bpet\b` 而非 `pet`）。
+   - `\bus\b`（超声）会命中代词 us；`ai`/`ai` 会命中 "main""domain"。
+   - `adc` 会命中 "advocacy" 等；建议 `\badc\b`。
+3. **`str.contains` 含捕获组会触发 `UserWarning`**：用 `(?:...)` 非捕获组，或忽略该警告。
+4. **统计口径要写明**：分桶是**可多重归类**的（一篇文献可同时属于 CT 与深度学习），
+   故各桶占比之和 **>100%**；务必在报告中标注，否则会被误读为互斥分类。
+
+#### 3.2 引用文献的 PMID 核对（强制）
+
+**报告中引用的每一条 `PMID → 标题/期刊`，都必须回查 CSV 校验后才能写入。**
+凭印象或凭标题相似度外推 PMID **极易张冠李戴**（真实案例：把 `42670019`「CT texture phantom dataset」
+误配到 habitat 主题；凭空写出不存在的 PMID）。
+
+```python
+df["Pmid"] = df["Pmid"].astype(str)
+for p in ["42759982", "42721921", "42670019"]:
+    r = df[df["Pmid"] == p]
+    print(f"{p}  {r.iloc[0]['Journal']} | {r.iloc[0]['Title']}" if len(r) else f"{p}  *** NOT FOUND ***")
+```
+
+出现 `*** NOT FOUND ***` 或标题对不上时，**改用关键词在 CSV 内反查真实 PMID**，
+或直接删除该引用——**绝不保留未经校验的 PMID**。
+
+#### 3.3 交付物
+
+默认交付两件：
+
+1. **CSV**：全量元数据（可附 DOI 链接）。
+2. **分析报告（Markdown）**：检索式与口径说明 → 期刊分布 → 模态/方法/疾病分布 → 前沿方向与代表文献（PMID 已校验）→ 趋势判断与局限。
+
+### Phase 4: 提交
+
+用 `present_files` 一次性展示报告与 CSV。在最终答复中复述：命中量、时间口径（EDAT）、
+关键分布数字、主要趋势，并说明"PubMed 仅提供题录与摘要元数据，全文需经 DOI 跳转出版商"。
 
 ## 依赖
 
@@ -151,12 +301,17 @@ CLI 输出包含：
 pip install requests pandas
 ```
 
+WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就绪。
+
 ## 注意事项
 
 1. **检索式确认**: 执行前必须向用户展示检索式并确认
-2. **API 速率**: 脚本内置 0.4s 延迟，批量检索时注意耗时
-3. **结果上限**: PubMed E-utilities 单次最多返回约 10,000 条
-4. **日期格式**: 严格使用 `YYYY/MM/DD`
+2. **布尔优先级**: 混用 `AND`/`OR` 必须加括号
+3. **日期口径**: 默认 `edat`（入库日期），需在答复中明示
+4. **API 速率**: 脚本内置 0.4s 延迟，批量检索时注意耗时
+5. **结果上限**: PubMed E-utilities 单次最多返回约 10,000 条
+6. **日期格式**: 严格使用 `YYYY/MM/DD`
+7. **PMID 校验**: 引用前必须回查，杜绝编造
 
 ## 常见问题
 
@@ -164,5 +319,11 @@ pip install requests pandas
 |------|----------|
 | 结果为空 | 检查检索式语法；放宽条件；扩大时间范围 |
 | 结果太多 | 添加限定词；缩小时间；限定文献类型 |
+| 结果太少/漏检 | 检查是否误用 `AND` 收紧了同义词组；去掉领域限定词；补 MeSH 词 |
 | 需要更精确 | 使用 MeSH 主题词 `term[MeSH Major Topic]` |
 | 下载全文 | PubMed 仅提供元数据；通过 DOI 链接跳转出版商 |
+| 脚本路径报错 | 用 Glob 确认 `pubmed_cli.py` 实际位置，勿硬编码 `.claude/skills/...` |
+| `ModuleNotFoundError` | 切到 WorkBuddy 托管 venv，勿改系统环境 |
+| `tail` 后看不到统计 | `tail` 会截掉开头统计段；勿截断或改读 CSV 自行统计 |
+| 分桶占比合计超 100% | 属正常（可多重归类），需在报告中标注口径 |
+| 聚类关键词虚高 | 检查子串陷阱，短词加 `\b`（如 `spect`→`\bspect\b`） |

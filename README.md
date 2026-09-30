@@ -1,6 +1,6 @@
 # pubmed-retrieve
 
-基于 Claude Code 的 PubMed 生物医学文献检索技能。用自然语言描述研究需求，自动生成 PubMed 检索式，通过 NCBI E-utilities API 执行检索，输出结构化汇总表。
+基于 AI 编程助手（Claude Code / WorkBuddy 等）的 PubMed 生物医学文献检索技能。用自然语言描述研究需求，自动生成 PubMed 检索式，通过 NCBI E-utilities API 执行检索，输出结构化汇总表。
 
 ## 功能特性
 
@@ -13,7 +13,10 @@
 
 ### 环境要求
 
-**Python 3.8+** + `requests` + `pandas`。推荐使用 Miniconda 管理环境。
+**Python 3.8+** + `requests` + `pandas`。
+
+> 在 WorkBuddy 中运行时无需手动配置：技能会自动使用隔离的托管虚拟环境
+> （`~/.workbuddy/binaries/python/envs/default`）并在缺失时安装依赖，不会污染系统环境。
 
 #### 方式一：Miniconda（推荐）
 
@@ -39,19 +42,23 @@ python --version          # 应输出 3.8+
 python -c "import requests, pandas; print('OK')"  # 应输出 OK
 ```
 
-### 安装为 Claude Code Skill
+### 安装为 Skill
 
 ```bash
-# 克隆到 Claude Code skills 目录
-git clone https://github.com/<your-username>/pubmed-retrieve.git \
+# Claude Code
+git clone https://github.com/cloudinfer/pubmed-retrieve.git \
   ~/.claude/skills/pubmed-retrieve/
+
+# WorkBuddy
+git clone https://github.com/cloudinfer/pubmed-retrieve.git \
+  ~/.workbuddy/skills/pubmed-retrieve/
 ```
 
-或将 `pubmed-retrieve/` 文件夹手动复制到 `~/.claude/skills/`。
+或将 `pubmed-retrieve/` 文件夹手动复制到对应的 skills 目录。
 
 ### 验证
 
-在 Claude Code 中输入 `/pubmed-retrieve`，应出现在斜杠命令列表中。
+在 AI 助手中输入 `/pubmed-retrieve`，应出现在斜杠命令列表中。
 
 ## 使用方式
 
