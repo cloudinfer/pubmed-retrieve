@@ -157,11 +157,16 @@ def build_review_outputs(args, query, end_date):
         topic=args.deck_topic or "",
         query=query,
         query_file=None,
+        # deck_content reads `start`/`end`; review_evidence reads
+        # `start_date`/`end_date`. Provide both so the namespace serves either.
         start=args.start_date,
         end=end_date,
+        start_date=args.start_date,
+        end_date=end_date,
         max_results=args.max_results,
         corpus_size=args.review_corpus_size,
         per_theme=args.review_per_theme,
+        themes_file=args.review_themes_file or args.topics_file,
         search_date=datetime.now().strftime("%Y-%m-%d"),
     )
 
@@ -282,6 +287,11 @@ def main():
     parser.add_argument(
         "--review-per-theme", type=int, default=8,
         help="Minimum exemplars per synthesis theme (default: 8)"
+    )
+    parser.add_argument(
+        "--review-themes-file", default=None,
+        help="JSON {theme: regex} overriding the review synthesis themes "
+             "(defaults to --topics-file if given)"
     )
     parser.add_argument(
         "--full", action="store_true",
