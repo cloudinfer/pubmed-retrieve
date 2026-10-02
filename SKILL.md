@@ -1,12 +1,16 @@
 ---
 name: pubmed-retrieve
-description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, produces a summary table, and can render the results into an academic report deck (single-file HTML slides plus an editable PPTX) in a medical deep-blue Swiss grid style.
+description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, produces a summary table and analysis report, and automatically renders the results into an academic report deck (single-file HTML slides plus an editable PPTX) and a journal-grade systematic review draft in a medical deep-blue Swiss grid style — no further user request needed for Phase 5 and Phase 6.
 ---
 
 # PubMed Retrieve Skill
 
 根据用户需求生成 PubMed 检索式，调用 `scripts/` 下的脚本执行检索，生成文献汇总表；
-用户需要汇报时，还可把检索结果渲染成学术汇报 deck（单文件 HTML + 可编辑 PPTX）。
+随后**自动**把检索结果渲染成学术汇报 deck（单文件 HTML + 可编辑 PPTX），
+并**自动**编制期刊发表级系统综述草稿（Phase 5 / Phase 6 无需用户再次要求，检索完成即串联执行）。
+
+> **执行契约**：Phase 1–4 完成后，Agent 必须不经询问直接继续 Phase 5 与 Phase 6。
+> 仅当用户在本次请求中**明确表示不要** deck / 综述时才跳过对应阶段，并向用户说明已跳过。
 
 ## 路径约定
 
@@ -302,18 +306,20 @@ for p in ["42759982", "42721921", "42670019"]:
 1. **CSV**：全量元数据（可附 DOI 链接）。
 2. **分析报告（Markdown）**：检索式与口径说明 → 期刊分布 → 模态/方法/疾病分布 → 前沿方向与代表文献（PMID 已校验）→ 趋势判断与局限。
 
-### Phase 4: 提交
+### Phase 4: 提交（中间节点，非终点）
 
-用 `present_files` 一次性展示报告与 CSV。在最终答复中复述：命中量、时间口径（EDAT）、
-关键分布数字、主要趋势，并说明"PubMed 仅提供题录与摘要元数据，全文需经 DOI 跳转出版商"。
+用 `present_files` 展示报告与 CSV（若 Phase 5/6 产物即将就绪，可与最终交付合并为一次展示）。
+在答复中复述：命中量、时间口径（EDAT）、关键分布数字、主要趋势，
+并说明"PubMed 仅提供题录与摘要元数据，全文需经 DOI 跳转出版商"。
 
-如果用户还要学术汇报 PPT，继续走 Phase 5。
+Phase 4 完成后**不要停下等待用户指示**，直接进入 Phase 5（deck）与 Phase 6（系统综述）。
 
 ---
 
-### Phase 5: 生成学术汇报 PPT（用户要求时执行）
+### Phase 5: 生成学术汇报 PPT（自动执行，无需用户要求）
 
-把检索结果转成一份**可汇报的学术 deck**。视觉方向固定为 **「医学专业 + 科研科技」**，
+检索完成即自动执行本阶段。把检索结果转成一份**可汇报的学术 deck**。
+视觉方向固定为 **「医学专业 + 科研科技」**，
 采用**瑞士国际主义**方法论（16 列网格、直角色块、1px 发丝线、极致字号对比、
 无阴影无渐变无圆角），主色**医学深蓝 `#0A3D7C`**。
 
@@ -378,7 +384,8 @@ PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"   # 见 Ph
 
 #### 5.4 生成可编辑 `.pptx`
 
-HTML deck 是视觉稿；需要可编辑文件时，**按平台规范交由 `tencent-pptx` 技能生成**，
+HTML deck 是视觉稿；**默认必须产出**可编辑 `.pptx`（无需用户另行要求），
+**按平台规范交由 `tencent-pptx` 技能生成**，
 不要用脚本硬转。输入材料用 `output/deck_outline.md`（或 `deck_content.json`），
 并要求其遵守同一套医学深蓝规范：
 
@@ -404,9 +411,10 @@ HTML deck 是视觉稿；需要可编辑文件时，**按平台规范交由 `ten
 
 ---
 
-### Phase 6: 编制期刊发表级系统综述（用户要求综述时执行）
+### Phase 6: 编制期刊发表级系统综述（自动执行，无需用户要求）
 
-在检索结果之上，编制一份**可投稿级别**的系统综述，并同步扩展 deck 与 PPT。
+Phase 5 完成后自动进入本阶段。在检索结果之上，编制一份**可投稿级别**的系统综述，
+并同步扩展 deck 与 PPT。
 与 Phase 5 的分工：Phase 5 回答「检索到了什么」（描述性统计）；
 Phase 6 回答「这些证据支持什么、缺什么、证据有多可靠」（系统性综合）。
 Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得复用 Phase 5 的描述性主题桶**。
@@ -551,6 +559,8 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
     全文复核后应更新；PROBAST、GRADE 与 RoB 评估需人工完成，不得用推断填充
 11. **题录筛选不等于全文筛选**: PRISMA 流程中的「潜在纳入」是题录层面的计数，
     真正的「已纳入」必须在全文复核后确定
+12. **Phase 5/6 自动串联**: 检索完成后 deck（HTML + PPTX）与系统综述草稿**默认自动执行**，
+    不询问用户；仅当用户本次请求明确不要时才跳过，并在答复中说明。
 
 ## 常见问题
 
