@@ -8,6 +8,7 @@
 - **全自动检索管道**：搜索 PMID → 获取详情 → 保存 CSV → 打印汇总表，一条命令完成
 - **结构化输出**：CSV 包含 PMID、标题、作者、期刊、日期、DOI、摘要
 - **统计汇总**：终端直接输出期刊分布、年份分布和文献列表
+- **学术汇报 deck**：可把检索结果渲染成医学深蓝瑞士风 PPT（单文件 HTML + 可编辑 .pptx），内置版式校验器
 
 ## 安装
 
@@ -188,6 +189,35 @@ Search (edat) found 6699 results, retrieving top 10...
 | Date | 出版日期 (YYYY/MM/DD) |
 | Doi | DOI 链接 |
 | Abstract | 完整摘要 |
+
+## 学术汇报 deck（Phase 5）
+
+检索完成后可以把结果直接渲染成一份**学术汇报 PPT**：
+
+- **单文件 HTML deck**：无外部依赖，浏览器直接打开，`← / →` 翻页、`G` 页格索引、`Ctrl+P` 导出 PDF。
+- **可编辑 .pptx**：以 `deck_outline.md` 为素材，交由平台 PPT 能力生成。
+
+视觉方向固定为「医学专业 + 科研科技」：瑞士国际主义网格、直角色块、1px 发丝线、
+无阴影无渐变，主色医学深蓝 `#0A3D7C`。版式锁定为 M01–M12 共 12 种，
+配色/字号/网格规范见 `references/deck-theme.md`，版式契约见 `references/deck-layouts.md`。
+
+一键串联（检索 + 内容模型 + HTML deck）：
+
+```bash
+python scripts/pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
+    -o output/pubmed_results.csv \
+    --deck --deck-topic "影像组学在肝细胞癌预后预测中的应用"
+```
+
+分步执行：
+
+```bash
+python scripts/deck_content.py --csv output/pubmed_results.csv --out-dir output \
+    --topic "影像组学在肝细胞癌预后预测中的应用" --query-file query.txt \
+    --start 2021/01/01 --end 2026/10/02
+python scripts/deck_build.py    --content output/deck_content.json --out output/deck.html
+python scripts/deck_validate.py output/deck.html          # P0 必须为 0
+```
 
 ## PubMed 检索语法参考
 

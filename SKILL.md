@@ -1,15 +1,22 @@
 ---
 name: pubmed-retrieve
-description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, and produces a summary table.
+description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, produces a summary table, and can render the results into an academic report deck (single-file HTML slides plus an editable PPTX) in a medical deep-blue Swiss grid style.
 ---
 
 # PubMed Retrieve Skill
 
-根据用户需求生成 PubMed 检索式，调用 `scripts/` 下的脚本执行检索，并生成文献汇总表。
+根据用户需求生成 PubMed 检索式，调用 `scripts/` 下的脚本执行检索，生成文献汇总表；
+用户需要汇报时，还可把检索结果渲染成学术汇报 deck（单文件 HTML + 可编辑 PPTX）。
 
 ## 路径约定
 
 本 skill 的脚本位于 **本 SKILL.md 所在目录**下的 `scripts/`。请以 skill 目录为基准定位脚本，不要硬编码 `.claude/skills/...` 这类路径。
+
+| 子目录 | 内容 |
+|--------|------|
+| `scripts/` | `pubmed_cli.py`（检索 CLI）、`pubmed_script.py`（E-utilities 实现）、`deck_content.py` / `deck_build.py` / `deck_validate.py`（Phase 5 deck 链路） |
+| `assets/deck/` | `template-medical.html`（医学深蓝瑞士风单文件 deck 模板） |
+| `references/` | `deck-theme.md`（配色/字号/网格规范）、`deck-layouts.md`（M01–M12 版式契约） |
 
 常见安装位置：
 
@@ -300,6 +307,101 @@ for p in ["42759982", "42721921", "42670019"]:
 用 `present_files` 一次性展示报告与 CSV。在最终答复中复述：命中量、时间口径（EDAT）、
 关键分布数字、主要趋势，并说明"PubMed 仅提供题录与摘要元数据，全文需经 DOI 跳转出版商"。
 
+如果用户还要学术汇报 PPT，继续走 Phase 5。
+
+---
+
+### Phase 5: 生成学术汇报 PPT（用户要求时执行）
+
+把检索结果转成一份**可汇报的学术 deck**。视觉方向固定为 **「医学专业 + 科研科技」**，
+采用**瑞士国际主义**方法论（16 列网格、直角色块、1px 发丝线、极致字号对比、
+无阴影无渐变无圆角），主色**医学深蓝 `#0A3D7C`**。
+
+设计依据（**生成前必读，不要凭记忆发挥**）：
+
+| 文件 | 内容 |
+|------|------|
+| `references/deck-theme.md` | 调色板白名单、字体栈、网格与安全边距、字号阶梯、禁止清单 F01–F12 |
+| `references/deck-layouts.md` | M01–M12 锁定版式契约、`deck_content.json` 字段定义、内容映射与写作规则 |
+
+**交付两件**：① 单文件 HTML deck（高保真、可翻页演示、可打印为 PDF）；② 可编辑 `.pptx`。
+
+#### 5.1 生成内容模型 `deck_content.json`
+
+```bash
+PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"   # 见 Phase 0
+
+"$PY" "<SKILL_DIR>/scripts/deck_content.py" \
+  --csv "<workspace>/pubmed_results.csv" \
+  --out-dir "<workspace>/output" \
+  --topic "<检索主题，≤30 字>" \
+  --query-file "<workspace>/.workbuddy/tmp_query.txt" \
+  --start "2021/01/01" --end "2026/10/02" --max-results 2000 \
+  --search-date "<今天 YYYY-MM-DD>"
+```
+
+产出 `output/deck_content.json`（唯一数据源）与 `output/deck_outline.md`（逐页大纲，
+同时是交给 PPT 生成环节的素材）。
+
+**主题分桶必须针对本次检索定制**：脚本内置的是通用默认桶，
+先跑一轮看各桶占比，再用 `--topics-file buckets.json` 传入定制桶（JSON 对象 `{"桶名": "正则"}`）。
+**所有短词/缩写一律加 `\b`。**
+
+> ⚠️ **不要用检索式的核心词做分桶**。核心词（如 radiomics 检索里的 radiomics）
+> 会命中 90% 以上的文献，桶占比接近 100%，不构成任何分布信号。
+> 脚本会把占比 ≥ 80% 的桶自动标记为 `scope: "core"`，分布图只画 `specific` 桶，
+> 核心词桶降级为脚注说明。定桶时同理：桶的正则应该是**区分性特征**
+> （方法学、研究设计、技术分支），而不是主题本身。
+
+#### 5.2 渲染单文件 HTML deck
+
+```bash
+"$PY" "<SKILL_DIR>/scripts/deck_build.py" \
+  --content "<workspace>/output/deck_content.json" \
+  --out "<workspace>/output/<主题>_deck.html"
+```
+
+输出为**静态单文件 HTML**：无 CDN、无外部字体、无图表库，图表全部是内联 SVG。
+翻页运行时已内置：`← / →`、`Home / End`、`空格`、滚轮、触屏滑动、底部页码块跳转、
+`G` 打开页格索引、`Esc` 关闭。`Ctrl+P` 可直接打印为 PDF（每页一张）。
+
+#### 5.3 运行版式校验（强制）
+
+```bash
+"$PY" "<SKILL_DIR>/scripts/deck_validate.py" "<workspace>/output/<主题>_deck.html"
+```
+
+- **P0 必须为 0** 才可交付；存在 P0 时先修 HTML 再重新校验，**不得直接交付**。
+- P1 需逐条确认；需要放宽时在答复中说明理由，必要时加 `--strict` 让 P1 也阻断。
+- P0 覆盖：调色板外颜色、圆角/阴影/渐变、字号 < 13px、外部资源引用、未知版式。
+- P1 覆盖：禁用字重与斜体、标题居中、页眉页脚页码缺失、警示色超限、文献卡片超 4 张。
+
+#### 5.4 生成可编辑 `.pptx`
+
+HTML deck 是视觉稿；需要可编辑文件时，**按平台规范交由 `tencent-pptx` 技能生成**，
+不要用脚本硬转。输入材料用 `output/deck_outline.md`（或 `deck_content.json`），
+并要求其遵守同一套医学深蓝规范：
+
+> 医学专业 + 科研科技视觉方向；主色医学深蓝 `#0A3D7C`；
+> 瑞士网格版式：16 列网格、直角色块、1px 发丝线、无阴影、无渐变、无圆角；
+> 字号阶梯见 `references/deck-theme.md`；页面顺序与每页内容见 `deck_outline.md`；
+> 标题一律左对齐贴网格线，不居中。
+
+#### 5.5 提交
+
+用 `present_files` **一次性**展示 HTML deck 与 `.pptx`，并在答复中说明：
+命中量、时间口径（EDAT）、deck 页数、校验结果（P0/P1/P2 计数）、
+以及主题分桶可多重归类的口径提示。
+
+> **一键串联**：`pubmed_cli.py` 加了 `--deck` / `--deck-topic` 参数，
+> 检索完成后自动跑 5.1 + 5.2，可省去手工调用：
+> ```bash
+> "$PY" "<SKILL_DIR>/scripts/pubmed_cli.py" -f query.txt -s "2021/01/01" -e "2026/10/02" \
+>   -o "<workspace>/output/pubmed_results.csv" \
+>   --deck --deck-topic "radiomics 在肝细胞癌预后预测中的应用"
+> ```
+> 校验（5.3）与 `.pptx`（5.4）仍需单独执行。
+
 ## 依赖
 
 ```bash
@@ -307,6 +409,8 @@ pip install requests pandas
 ```
 
 WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就绪。
+Phase 5 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **只用标准库 + pandas**，
+不引入新依赖；`.pptx` 由平台 PPT 能力产出，脚本侧不需要 `python-pptx`。
 
 ## 注意事项
 
@@ -317,6 +421,10 @@ WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就
 5. **结果上限**: PubMed E-utilities 单次最多返回约 10,000 条
 6. **日期格式**: 严格使用 `YYYY/MM/DD`
 7. **PMID 校验**: 引用前必须回查，杜绝编造
+8. **deck 配色是白名单**: Phase 5 的颜色、字号、版式都锁死在规范文件里，
+   不得临时自定义 hex，也不得发明 M01–M12 之外的版式；改配色必须同步改
+   `references/deck-theme.md` 与 `assets/deck/template-medical.html` 的 `:root`
+9. **deck 校验门槛**: `deck_validate.py` 的 P0 必须为 0 才能交付
 
 ## 常见问题
 
@@ -327,6 +435,11 @@ WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就
 | 结果太少/漏检 | 检查是否误用 `AND` 收紧了同义词组；去掉领域限定词；补 MeSH 词 |
 | 需要更精确 | 使用 MeSH 主题词 `term[MeSH Major Topic]` |
 | 下载全文 | PubMed 仅提供元数据；通过 DOI 链接跳转出版商 |
+| deck 打不开/白屏 | 单文件需在浏览器直接打开并允许本地脚本；不要放进沙箱 iframe |
+| deck 某页内容溢出 | M06 条形 >10 条、M08 分桶 >8 条时先减项，或拆成两页 |
+| 要导出 PDF | 浏览器打开 deck → Ctrl+P → 边距「无」→ 每页一张（16:9 已设 `@page`） |
+| 想让 deck 换主题色 | 改 `references/deck-theme.md` 与模板 `:root` 两处，再跑 `deck_validate.py` |
+| 校验报 P0 调色板外颜色 | 把该 hex 换成 `deck-theme.md` 第 2 节的 token；确需新色则先登记进白名单 |
 | 脚本路径报错 | 用 Glob 确认 `pubmed_cli.py` 实际位置，勿硬编码 `.claude/skills/...` |
 | `ModuleNotFoundError` | 切到 WorkBuddy 托管 venv，勿改系统环境 |
 | `tail` 后看不到统计 | `tail` 会截掉开头统计段；勿截断或改读 CSV 自行统计 |
