@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a systematic-review evidence base from a PubMed results CSV.
 
-This is the analysis layer of the review pipeline (Phase 6 of the
+This is the analysis layer of the review pipeline (Phase 5 of the
 pubmed-retrieve skill). It turns a flat CSV of PubMed records into the
 structured artefacts a PRISMA-style review needs:
 
@@ -955,6 +955,10 @@ def main() -> None:
     ap.add_argument("--themes-file", default=None, help="JSON {theme: regex} overriding synthesis themes")
     ap.add_argument("--criteria-file", default=None,
                     help="JSON overriding PICOS eligibility criteria (pop_in/pop_strong/other_primary/idx_in/out_in + labels)")
+    ap.add_argument("--picos-file", default=None,
+                    help="JSON overriding the PICOS wording. Not used for screening here -- it is "
+                         "recorded into meta.picos so downstream artifacts (in particular the deck's "
+                         "PICOS page) cannot invent their own population")
     ap.add_argument("--allow-default-criteria", action="store_true",
                     help="Permit the built-in hepatocellular-carcinoma criteria on a non-hepatic topic (normally refused)")
     ap.add_argument("--search-date", default=__import__("datetime").date.today().isoformat())
@@ -967,9 +971,24 @@ def main() -> None:
             query = fh.read().strip()
     guard_criteria(args.topic, query, args.allow_default_criteria, args.out_dir)
 
+    picos = None
+    if args.picos_file:
+        if not os.path.exists(args.picos_file):
+            raise SystemExit(f"--picos-file not found: {args.picos_file}")
+        with open(args.picos_file, encoding="utf-8") as fh:
+            picos = json.load(fh)
+
     content = build(args)
     content.setdefault("meta", {})["criteria_source"] = CRITERIA_SOURCE
     content["meta"]["criteria_is_default"] = CRITERIA_IS_DEFAULT
+    # The PICOS wording travels with the evidence base. The deck's M13 page used
+    # to hardcode its own (hepatocellular-carcinoma) rows, so a generic topic got
+    # a deck that contradicted its own review; recording it here gives the deck a
+    # single authoritative source instead of a second, drifting copy.
+    if picos:
+        content["meta"]["picos"] = picos
+        content["meta"]["picos_source"] = os.path.basename(args.picos_file)
+    content["meta"]["picos_available"] = bool(picos)
     os.makedirs(args.out_dir, exist_ok=True)
 
     json_path = os.path.join(args.out_dir, "review_evidence.json")

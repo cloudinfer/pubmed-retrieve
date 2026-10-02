@@ -1,5 +1,5 @@
 """
-Phase 5 renderer: deck_content.json -> single-file HTML deck.
+Phase 6 renderer: deck_content.json -> single-file HTML deck.
 
 Layouts M01-M12 and every styling rule live in:
     references/deck-layouts.md   (structure + data slot contracts)
@@ -615,20 +615,38 @@ def build_closing(c: dict, page_no: int) -> str:
 # descriptive deck rather than replacing it, so a reader sees both "what the
 # corpus looks like" and "what the corpus supports".
 # ---------------------------------------------------------------------------
-PICOS_ROWS = [
-    ("P", "肝细胞癌患者，不限分期与治疗方式"),
-    ("I", "CT / MRI / 超声 / PET 影像组学或影像人工智能模型"),
-    ("C", "不设强制对照；临床模型与联合模型均计入"),
-    ("O", "总生存、无复发生存、早期复发、治疗应答及预测性能"),
-    ("S", "原始研究与系统综述均纳入；述评与通信排除"),
+PICOS_KEYS = [
+    ("P", "population"),
+    ("I", "index"),
+    ("C", "comparator"),
+    ("O", "outcome"),
+    ("S", "study_type"),
 ]
+PICOS_MISSING = "（未提供）"
+
+
+def picos_rows(rv: dict) -> tuple[list[tuple[str, str]], bool]:
+    """PICOS rows for M13, taken from the review's own PICOS.
+
+    These used to be hardcoded to hepatocellular carcinoma — the same leak the
+    review scripts had, and it put 「肝细胞癌患者」on the PICOS page of a generic
+    radiomics deck. They now come from ``review_evidence.json`` → ``meta.picos``,
+    so the deck can only ever repeat what the review actually screened with.
+
+    Returns ``(rows, missing)``; ``missing`` is True when any slot is empty.
+    """
+    picos = (rv.get("meta") or {}).get("picos") or {}
+    rows = [(k, str(picos.get(key) or "").strip()) for k, key in PICOS_KEYS]
+    missing = any(not v for _, v in rows)
+    return [(k, v or PICOS_MISSING) for k, v in rows], missing
 
 
 def build_picos(c: dict, rv: dict, page_no: int) -> str:
+    rows, missing = picos_rows(rv)
     left = "".join(
         f'<div class="kv"><span class="k">{esc(k)}</span>'
         f'<span class="v t-bodys">{esc(v)}</span></div>'
-        for k, v in PICOS_ROWS
+        for k, v in rows
     )
     prisma = rv.get("prisma", {})
     right = [
@@ -638,6 +656,11 @@ def build_picos(c: dict, rv: dict, page_no: int) -> str:
         f"已确认纳入 {prisma.get('included_confirmed', 0)} 篇（全文复核待完成）。",
         "偏倚风险与 GRADE 评级需全文复核后填写，本页不以推断填充。",
     ]
+    if missing:
+        right.append(
+            "本页 PICOS 未随证据底座提供，暂以占位符呈现；"
+            "请带 --picos-file 重跑证据底座后再生成 deck。"
+        )
     right_html = "".join(f'<div class="item">{esc(t)}</div>' for t in right)
     body = (
         f'<h2 class="t-h2" style="grid-column:{FULL}">研究问题与纳入标准</h2>'
@@ -763,6 +786,30 @@ def build_convergence(c: dict, rv: dict, page_no: int) -> str:
                 body=body, page=page_no, meta=c["meta"])
 
 
+AGENDA_PRIORITY = {"高": 0, "中": 1, "低": 2}
+
+
+def gap_agenda(gaps: list[dict], limit: int = 5) -> list[str]:
+    """Agenda items derived from this run's gaps, ordered by priority.
+
+    This used to be five hardcoded sentences. Deriving it from the gap objects
+    means the agenda beside them cannot describe a different corpus than the
+    gaps do — and it removes the last place where topic-specific residue could
+    survive a change of topic inside a string literal.
+    """
+    ranked = sorted(gaps, key=lambda g: AGENDA_PRIORITY.get(g.get("priority", "中"), 1))
+    out: list[str] = []
+    seen: set[str] = set()
+    for g in ranked:
+        text = (g.get("implication") or "").strip()
+        key = text[:12]
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text if text.endswith(("。", "；")) else text + "。")
+    return out[:limit]
+
+
 def build_gaps(c: dict, rv: dict, page_no: int) -> str:
     gaps = rv.get("gaps", [])[:6]
     left = "".join(
@@ -770,13 +817,7 @@ def build_gaps(c: dict, rv: dict, page_no: int) -> str:
         f'<div class="t-cap" style="margin-top:4px">{esc(g["evidence"])}</div></div>'
         for g in gaps
     )
-    agenda = [
-        "把外部验证设为最低门槛，而非加分项。",
-        "推动预测模型研究的前瞻注册，明确主要终点与分析计划。",
-        "优先投入影像-病理-多组学交叉验证研究。",
-        "开展模态与模型族的头对头比较研究。",
-        "统一报告规范：强制报告 AUC/C-index 及其队列语境。",
-    ]
+    agenda = gap_agenda(rv.get("gaps", []))
     right = "".join(f'<div class="item">{esc(t)}</div>' for t in agenda)
     body = (
         f'<h2 class="t-h2" style="grid-column:{FULL}">研究空白与研究议程</h2>'
@@ -861,23 +902,73 @@ def build_quant(c: dict, rv: dict, page_no: int) -> str:
                 body=body, page=page_no, meta=c["meta"])
 
 
-def build_findings(c: dict, rv: dict, page_no: int) -> str:
+def derived_findings(rv: dict) -> list[tuple[str, str, str]]:
+    """(index, headline, detail) recomputed from the evidence base.
+
+    These four lines used to be string literals, which is how "MVI 预测" and
+    "TACE 应答预测" kept showing up in decks about unrelated topics. Every claim
+    below is now recomputed from ``review_evidence.json``, so the deck can only
+    state what the review actually measured.
+    """
     conv = rv.get("matrix", {}).get("convergence", [])
-    strong = [x["theme"] for x in conv if x["strength"] == "强"]
+    levels = rv.get("levels", [])
+    p = rv.get("prisma", {})
+    n = rv.get("numbers", {})
+    pool = p.get("eligible_pending_fulltext", 0) or 1
+
+    top = max(conv, key=lambda x: x.get("net", 0)) if conv else None
+    strong = [x["theme"] for x in conv if x.get("strength") == "强"]
+    weak = [x["theme"] for x in conv if x.get("strength") in ("弱", "极弱", "空白")]
+    l4 = next((x["count"] for x in levels if x["level"] == "IV"), 0)
+    l1 = next((x["count"] for x in levels if x["level"] == "I"), 0)
+    ext_rate = pct(n.get("external_validation_n", 0), pool)
+    pro_rate = pct(n.get("prospective_n", 0), pool)
+
+    items: list[tuple[str, str, str]] = []
+    if top:
+        items.append((
+            "01",
+            f"证据收敛最强的方向是{top['theme']}",
+            f"净支持 {top.get('net', 0)} 篇（占文献池 {top.get('share', 0)}%），"
+            f"强度评级「{top.get('strength', '—')}」，置信度「{top.get('confidence', '—')}」。",
+        ))
+    items.append((
+        "02",
+        "高等级证据稀少，证据底座以回顾性队列为主",
+        f"Level I 仅 {l1} 篇（{pct(l1, pool):.1f}%），Level IV（队列/病例对照）{l4} 篇"
+        f"（{pct(l4, pool):.1f}%），构成证据主体。",
+    ))
+    items.append((
+        "03",
+        "验证强度是全局性短板，而非个别研究的不足",
+        f"外部验证或多中心设计 {ext_rate:.1f}%、前瞻性研究 {pro_rate:.1f}%，"
+        f"两项占比在主题间高度一致，指向领域层面的系统性缺陷。",
+    ))
+    if not strong:
+        items.append((
+            "04",
+            f"{len(conv)} 个主题无一达到「强」收敛",
+            "不存在任何方向，其证据质量显著优于该领域整体平均水平。",
+        ))
+    else:
+        items.append((
+            "04",
+            f"仅 {len(strong)} 个主题达到「强」收敛",
+            f"{'、'.join(strong[:3])}；"
+            + (f"其余方向偏弱（{'、'.join(weak[:3])}）。" if weak else "其余方向居中。"),
+        ))
+    # Deliberately four items: the quantitative range (AUC, training→validation
+    # decline) already has its own page (M19), and a fifth row pushes the block
+    # past the 720px canvas.
+    return items[:4]
+
+
+def build_findings(c: dict, rv: dict, page_no: int) -> str:
     levels = rv.get("levels", [])
     pool = rv.get("prisma", {}).get("eligible_pending_fulltext", 0)
     l4 = next((x["count"] for x in levels if x["level"] == "IV"), 0)
-    items = [
-        ("01", "影像组学模型的预测性能在多数 Meta 分析中优于单纯临床-影像模型",
-         "在复发预测、MVI 预测与 TACE 应答预测中重复出现，是一致性最高的发现。"),
-        ("02", "预测能力集中在 MVI、早期复发与治疗应答三类终点",
-         "对离散、可病理确证的终点效果最好，对时间-事件终点稳定性较差。"),
-        ("03", "六个主题无一达到「强」收敛",
-         ("不存在任何方向，其证据质量显著优于该领域整体平均水平。"
-          if not strong else f"仅 {strong[0]} 达到「强」，其余均为中或弱。")),
-        ("04", "验证强度是全局性短板，而非个别研究的不足",
-         "外部验证率与前瞻性占比在主题间高度一致，指向领域层面系统性缺陷。"),
-    ]
+    ext_rate = pct(rv.get("numbers", {}).get("external_validation_n", 0), pool or 1)
+    items = derived_findings(rv)
     rows = "".join(
         f'<div style="display:grid;grid-template-columns:56px 1fr;column-gap:16px;'
         f'padding:13px 0;border-bottom:1px solid {HAIR}">'
@@ -892,8 +983,8 @@ def build_findings(c: dict, rv: dict, page_no: int) -> str:
         f'<div style="grid-column:{FULL};margin-top:22px">{rows}</div>'
         f'<div style="grid-column:{FULL};margin-top:22px;'
         f'border-top:2px solid var(--ink);padding-top:14px">'
-        f'<p class="t-bodys">证据边界：Level IV 占 {l4 / (pool or 1) * 100:.1f}%、'
-        f'外部验证率不足三成，按 GRADE 框架确定性起点即为「低」；'
+        f'<p class="t-bodys">证据边界：Level IV 占 {pct(l4, pool or 1):.1f}%、'
+        f'外部验证或多中心设计占 {ext_rate:.1f}%，按 GRADE 框架确定性起点受限；'
         f'PROBAST 与 GRADE 尚未完成，全文复核前不支持临床推荐强度判定。</p></div>'
     )
     return page(layout="M20", label="核心发现", title="综述核心发现",
@@ -988,6 +1079,18 @@ def default_template_path() -> str:
     return os.path.join(os.path.dirname(here), "assets", "deck", "template-medical.html")
 
 
+def effective_review(content: dict, review: dict | None) -> dict | None:
+    """Resolve the review layer from its two possible carriers.
+
+    ``deck_content.json`` already carries a ``review`` block (written by
+    ``deck_content.py --review``) so that the outline handed to the PPT step
+    contains the same review layer the HTML deck draws. An explicit ``--review``
+    file wins when both are present — the normal path passes the same JSON to
+    both, so there is nothing to report.
+    """
+    return review or content.get("review") or None
+
+
 def render_deck(content: dict, template_path: str | None = None,
                 review: dict | None = None) -> str:
     """Inject rendered slides into the template and return the full HTML string."""
@@ -996,7 +1099,7 @@ def render_deck(content: dict, template_path: str | None = None,
         raise SystemExit(f"Template not found: {path}")
     with open(path, "r", encoding="utf-8") as fh:
         template = fh.read()
-    slides = compose(content, review)
+    slides = compose(content, effective_review(content, review))
     return (
         template.replace("{{TITLE}}", esc(content["meta"]["topic"]))
         .replace("{{SLIDES}}", "\n".join(slides))
@@ -1006,13 +1109,14 @@ def render_deck(content: dict, template_path: str | None = None,
 def write_deck(content: dict, out_path: str, template_path: str | None = None,
                review: dict | None = None) -> int:
     """Render and write the deck. Returns the page count."""
+    rv = effective_review(content, review)
     html_out = render_deck(content, template_path, review)
     parent = os.path.dirname(os.path.abspath(out_path))
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(html_out)
-    return len(compose(content, review))
+    return len(compose(content, rv))
 
 
 def main() -> None:
@@ -1021,7 +1125,8 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="Output HTML path")
     ap.add_argument("--template", default=None, help="Template path (default: assets/deck/template-medical.html)")
     ap.add_argument("--review", default=None,
-                    help="Path to review_evidence.json; adds the systematic-review pages")
+                    help="Path to review_evidence.json; adds the systematic-review pages. "
+                         "Optional when deck_content.json already embeds a review block")
     args = ap.parse_args()
 
     with open(args.content, "r", encoding="utf-8") as fh:
@@ -1033,8 +1138,9 @@ def main() -> None:
             review = json.load(fh)
 
     pages = write_deck(content, args.out, args.template, review)
+    rv = effective_review(content, review)
     print(f"[deck] html -> {args.out}  ({pages} pages"
-          + (" , review pages included" if review else "") + ")")
+          + (" , review pages included" if rv else " , descriptive layer only") + ")")
 
 
 if __name__ == "__main__":

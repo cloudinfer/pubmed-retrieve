@@ -1,5 +1,5 @@
 """
-Deck content model builder for pubmed-retrieve (Phase 5).
+Deck content model builder for pubmed-retrieve (Phase 6).
 
 Reads the retrieval CSV produced by pubmed_cli.py and emits:
   - deck_content.json : the single source of truth consumed by deck_build.py
@@ -316,7 +316,7 @@ def build_content(args) -> dict:
 
     articles = select_articles(records, max_items=args.max_articles)
 
-    return {
+    content = {
         "schema": SCHEMA,
         "meta": meta,
         "kpis": build_kpis(records, len(journal_counter), topics, years),
@@ -327,15 +327,305 @@ def build_content(args) -> dict:
         "notes": notes,
     }
 
+    # The review layer rides inside the content model rather than being passed
+    # separately to each consumer. The outline written here is the only material
+    # the PPT step receives, so a review layer that lives only in a CLI flag
+    # silently drops out of the slides.
+    review_path = getattr(args, "review", None)
+    if review_path:
+        if not os.path.exists(review_path):
+            raise SystemExit(f"--review not found: {review_path}")
+        with open(review_path, encoding="utf-8") as fh:
+            content["review"] = review_digest(json.load(fh))
+        meta["review_source"] = os.path.basename(review_path)
+        meta["review_layers"] = sorted(
+            m for m in ("prisma", "levels", "numbers", "gaps", "matrix")
+            if content["review"].get(m)
+        )
+    else:
+        meta["review_source"] = None
+        meta["review_layers"] = []
+    return content
+
+
+# ---------------------------------------------------------------------------
+# Review layer.
+#
+# The deck is the *last* stage of the pipeline, not the first. The systematic
+# review is composed first, and the deck then renders its review layer from the
+# review's own evidence base. That ordering is the reason this module accepts
+# --review at all: the outline it writes is the hand-off material for the .pptx,
+# so a review layer that is missing here never reaches the slides.
+# ---------------------------------------------------------------------------
+REVIEW_LIST_KEYS = ("prisma", "levels", "numbers", "gaps", "themes")
+REVIEW_META_KEYS = ("topic", "search_date", "criteria_source",
+                    "picos", "picos_source", "picos_available")
+
+
+def review_digest(rv: dict) -> dict:
+    """Compact copy of the review layer, embedded in ``deck_content.json``.
+
+    Only the fields ``deck_build.py`` actually reads are kept, so the content
+    model stays small enough to read while remaining the single source of truth
+    for both the HTML deck and the outline handed to the PPT step.
+    """
+    out = {k: rv[k] for k in REVIEW_LIST_KEYS if k in rv}
+    out["matrix"] = {"convergence": (rv.get("matrix") or {}).get("convergence", [])}
+    rmeta = rv.get("meta") or {}
+    out["meta"] = {k: rmeta[k] for k in REVIEW_META_KEYS if k in rmeta}
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Markdown outline — the hand-off format for the .pptx pipeline.
 # ---------------------------------------------------------------------------
+FALLBACK_SEQ = [
+    ("M01", "封面"), ("M03", "目录"), ("M04", "检索策略"), ("M05", "文献体量"),
+    ("M06", "来源期刊"), ("M07", "时间趋势"), ("M08", "主题分布"),
+    ("M09", "代表文献 1"), ("M10", "方向对照"), ("M11", "趋势与局限"),
+    ("M12", "结论"),
+]
+
+
+def page_sequence(c: dict) -> list[tuple[str, str]]:
+    """``(layout, title)`` for every page the HTML deck renders, in order.
+
+    Reading the sequence back off the renderer is what keeps the two artifacts
+    from drifting. The outline is the only material the PPT step receives, so if
+    the deck gains a review page the outline has to gain it too — without anyone
+    having to remember that a second list exists.
+    """
+    try:
+        import deck_build as db  # no reverse dependency: deck_build never imports us
+    except ImportError:
+        return list(FALLBACK_SEQ)
+    html = "\n".join(db.compose(c, c.get("review") or None))
+    seq = re.findall(r'data-layout="(M\d+)"[^>]*data-title="([^"]*)"', html)
+    return seq or list(FALLBACK_SEQ)
+
+
+def _article_chunks(c: dict) -> list[list[dict]]:
+    arts = c["articles"][:8]
+    return [arts[i:i + 4] for i in range(0, len(arts), 4)] or [[]]
+
+
+def _ol_cover(c, title, nth, ctx) -> list[str]:
+    m = c["meta"]
+    return [
+        f"- 主标题：{m['topic']}",
+        f"- 口径条：{ctx['window']} · EDAT 口径 · 命中 {m['hit_count']} 篇",
+    ]
+
+
+def _ol_agenda(c, title, nth, ctx) -> list[str]:
+    return [
+        "- 01 检索策略 / 02 文献体量 / 03 来源期刊",
+        "- 04 时间趋势 / 05 主题分布 / 06 代表文献",
+        "- 07 研究问题与 PRISMA / 08 证据等级与收敛 / 09 研究空白",
+    ]
+
+
+def _ol_method(c, title, nth, ctx) -> list[str]:
+    m, n = c["meta"], c["notes"]
+    return [
+        f"- 检索式：{m['query'] or '(未记录)'}",
+        f"- 时间窗口：{ctx['window']}",
+        f"- 日期字段：{m['date_field']}",
+        f"- 口径说明：{n['date_field']}",
+        "- 执行顺序：先完成系统综述（纳入标准→证据底座→综述成文），"
+        "再由综述产出 deck；本大纲中的综述页与综述正文同源。",
+    ]
+
+
+def _ol_kpi(c, title, nth, ctx) -> list[str]:
+    return [f"- {k['label']}：{k['value']} {k['unit']}（{k['note']}）" for k in c["kpis"]]
+
+
+def _ol_journals(c, title, nth, ctx) -> list[str]:
+    return [f"- {j['name']} — {j['count']} 篇（{j['share']}%）" for j in c["journals"]]
+
+
+def _ol_trend(c, title, nth, ctx) -> list[str]:
+    return [f"- {y['year']}：{y['count']} 篇" for y in c["years"]]
+
+
+def _ol_topics(c, title, nth, ctx) -> list[str]:
+    n = c["notes"]
+    out = []
+    for t in c["topics"]:
+        tag = ("（核心词桶：覆盖 ≥80%，源自检索式核心词，不构成分布信号）"
+               if t.get("scope") == "core" else "")
+        out.append(f"- {t['key']} — {t['count']} 篇（{t['share']}%）{tag}")
+    out.append(f"- 口径：{n['bucketing']}")
+    out.append("- 绘图要求：分布图只呈现非核心词桶；核心词桶以脚注说明，不进入图形。")
+    return out
+
+
+def _ol_cards(c, title, nth, ctx) -> list[str]:
+    chunks = _article_chunks(c)
+    chunk = chunks[min(nth - 1, len(chunks) - 1)]
+    return [f"- PMID {a['pmid']}｜{a['journal']}（{a['year'] or 'n.d.'}）｜{a['title']}"
+            f"｜入选理由：{a['reason']}" for a in chunk] or ["- （无代表文献）"]
+
+
+def _ol_duo(c, title, nth, ctx) -> list[str]:
+    return ["- 依 M08 分桶取占比最高的两个方向做左右对照",
+            "- 每栏给出该方向的文献量、综述占比与外部验证占比",
+            "- 综述占比 ≥95% 时须注明「该桶本身即按综述特征命中」，不构成独立信号"]
+
+
+def _ol_outlook(c, title, nth, ctx) -> list[str]:
+    n = c["notes"]
+    return [
+        "- 趋势判断：依据 M07 与 M08 数据得出，不得脱离数据",
+        f"- 方法局限：{n['date_field']}；{n['bucketing']}",
+        "- 下一步：补检同义词、扩展时间窗、精读代表文献、寻找外部验证",
+    ]
+
+
+def _ol_closing(c, title, nth, ctx) -> list[str]:
+    m = c["meta"]
+    return [
+        f"- 本次检索在 {ctx['window']} 窗口内命中 {m['hit_count']} 篇文献，"
+        "证据层结论见前部综述页。",
+    ]
+
+
+# --- review pages ---------------------------------------------------------
+def _ol_picos(c, title, nth, ctx) -> list[str]:
+    rv = ctx["rv"] or {}
+    picos = (rv.get("meta") or {}).get("picos") or {}
+    if not picos:
+        return ["- PICOS 未随证据底座提供（缺 meta.picos）；"
+                "该页将以占位符呈现，须带 --picos-file 重跑证据底座"]
+    order = [("P", "population"), ("I", "index"), ("C", "comparator"),
+             ("O", "outcome"), ("S", "study_type")]
+    out = [f"- {k}：{picos.get(key, '（未提供）')}" for k, key in order]
+    src = (rv.get("meta") or {}).get("picos_source")
+    out.append(f"- 措辞来源：{src or '（未记录）'}")
+    return out
+
+
+def _ol_prisma(c, title, nth, ctx) -> list[str]:
+    p = (ctx["rv"] or {}).get("prisma", {})
+    out = [
+        f"- 数据库检出 {p.get('identified', 0)} 篇",
+        f"- 去重后 {p.get('records_screened', 0)} 篇",
+        f"- 题录初筛排除 {p.get('excluded_screening_total', 0)} 篇",
+        f"- 进入全文评估 {p.get('fulltext_assessed', 0)} 篇",
+        f"- 潜在纳入（待全文复核）{p.get('eligible_pending_fulltext', 0)} 篇",
+        f"- 已确认纳入 {p.get('included_confirmed', 0)} 篇",
+    ]
+    for e in (p.get("excluded_at_screening") or [])[:4]:
+        out.append(f"- 排除原因｜{e['reason']}　{e['count']}")
+    out.append("- 口径：筛选在题录与摘要层面由确定性规则执行，每条排除均登记原因，计数可复核。")
+    return out
+
+
+def _ol_levels(c, title, nth, ctx) -> list[str]:
+    rv = ctx["rv"] or {}
+    lv = rv.get("levels", [])
+    total = sum(x["count"] for x in lv) or 1
+    out = [f"- Level {x['level']}　{x['label']} — {x['count']} 篇"
+           f"（{x['count'] / total * 100:.1f}%）" for x in lv]
+    out.append("- 分级口径：由摘要中报告的研究设计推定，属暂定分级，须经全文复核确认。")
+    return out
+
+
+def _ol_convergence(c, title, nth, ctx) -> list[str]:
+    conv = ((ctx["rv"] or {}).get("matrix") or {}).get("convergence", [])
+    out = [f"- {x['theme']}｜支持 {x['support']}　Level I/II {x['high_level_rate']}%"
+           f"　外部验证 {x['external_validation_rate']}%　强度 {x['strength']}"
+           f"　置信度 {x['confidence']}" for x in conv]
+    out.append("- 口径：收敛指标在全量潜在纳入文献池上计算，强度阈值以文献池自身基线自校准。")
+    return out
+
+
+def _ol_gaps(c, title, nth, ctx) -> list[str]:
+    rv = ctx["rv"] or {}
+    out = [f"- [{g.get('priority', '—')}] {g['type']}｜{g['gap']}｜{g['evidence']}"
+           for g in (rv.get("gaps") or [])[:6]]
+    try:
+        import deck_build as db
+        out += [f"- 议程：{t}" for t in db.gap_agenda(rv.get("gaps") or [])]
+    except ImportError:
+        pass
+    return out
+
+
+def _ol_quant(c, title, nth, ctx) -> list[str]:
+    n = (ctx["rv"] or {}).get("numbers", {})
+    rows = [
+        ("auc_overall", "AUC / C-index（全部）"),
+        ("auc_training", "AUC（训练集）"),
+        ("auc_validation", "AUC（内部验证集）"),
+        ("auc_external", "AUC（外部验证集）"),
+        ("cohort_size", "队列规模（例）"),
+    ]
+    out = []
+    for key, label in rows:
+        st = n.get(key) or {}
+        if not st.get("n"):
+            continue
+        dec = 0 if key == "cohort_size" else 3
+        out.append(f"- {label}：n={st['n']}　中位 {st['median']:.{dec}f}　"
+                   f"IQR {st['p25']:.{dec}f}–{st['p75']:.{dec}f}")
+    out.append("- 口径：数值为「报告值」的分布，非合并效应量；多数摘要未报告置信区间。")
+    return out
+
+
+def _ol_findings(c, title, nth, ctx) -> list[str]:
+    try:
+        import deck_build as db
+        return [f"- {head}｜{sub}" for _, head, sub in db.derived_findings(ctx["rv"] or {})]
+    except ImportError:
+        return ["- （需 deck_build.py 以派生核心发现）"]
+
+
+def _ol_review_conclusion(c, title, nth, ctx) -> list[str]:
+    rv = ctx["rv"] or {}
+    p, n = rv.get("prisma", {}), rv.get("numbers", {})
+    pool = p.get("eligible_pending_fulltext", 0) or 1
+    conv = (rv.get("matrix") or {}).get("convergence", [])
+    weak = [x["theme"] for x in conv if x.get("strength") in ("弱", "极弱", "空白")]
+    auc = n.get("auc_overall") or {}
+    out = [
+        f"- 证据规模：潜在纳入 {p.get('eligible_pending_fulltext', 0)} 篇；"
+        f"Level I {next((x['count'] for x in rv.get('levels', []) if x['level'] == 'I'), 0)} 篇",
+        f"- 性能水平：AUC/C-index 中位 {auc.get('median', '—')}"
+        f"（IQR {auc.get('p25', '—')}–{auc.get('p75', '—')}），训练集高于内部验证集",
+        f"- 验证强度：外部验证率 {n.get('external_validation_n', 0) / pool * 100:.1f}%，"
+        f"前瞻性 {n.get('prospective_n', 0) / pool * 100:.1f}%",
+    ]
+    out.append("- 薄弱方向：" + ("、".join(weak[:3]) + " 证据强度偏弱"
+                                if weak else "各主题证据强度均衡"))
+    out.append("- 结论边界：全文复核与 GRADE 评级完成前，不支持临床推荐强度的判定")
+    return out
+
+
+OUTLINE_BLOCKS = {
+    "M01": _ol_cover, "M03": _ol_agenda, "M04": _ol_method, "M05": _ol_kpi,
+    "M06": _ol_journals, "M07": _ol_trend, "M08": _ol_topics, "M09": _ol_cards,
+    "M10": _ol_duo, "M11": _ol_outlook, "M12": _ol_closing,
+    "M13": _ol_picos, "M14": _ol_prisma, "M15": _ol_levels,
+    "M16": _ol_convergence, "M17": _ol_gaps, "M18": _ol_review_conclusion,
+    "M19": _ol_quant, "M20": _ol_findings,
+}
+
+LAYER = {
+    "M13": "综述层", "M14": "综述层", "M15": "综述层", "M16": "综述层",
+    "M17": "综述层", "M18": "综述层", "M19": "综述层", "M20": "综述层",
+}
+
+
 def render_outline(c: dict) -> str:
     m, n = c["meta"], c["notes"]
+    rv = c.get("review") or None
     window = f"{m['start_date'] or '不限'} 至 {m['end_date'] or '不限'}"
     limit = "不限" if not m["max_results"] else f"{m['max_results']} 篇"
+    ctx = {"window": window, "rv": rv}
 
+    seq = page_sequence(c)
     lines = [
         f"# {m['topic']}",
         "",
@@ -346,60 +636,27 @@ def render_outline(c: dict) -> str:
         f"- 日期字段：{m['date_field']}",
         f"- 结果上限：{limit} ｜ 命中：{m['hit_count']} 篇",
         f"- 检索日期：{m['search_date']}",
+        f"- 页数：{len(seq)}",
+        ("- 综述层：已包含（先成文系统综述，再由综述派生本 deck；"
+         "下方标注「综述层」的页面直接取自综述证据底座）"
+         if rv else
+         "- 综述层：**缺失**。本 deck 仅含描述性统计。请先完成系统综述，"
+         "再带 --review 重跑 deck_content.py，否则交付给 PPT 环节的大纲不会包含综述内容。"),
         "",
         "---",
         "",
-        "## M01 · 封面",
-        f"- 主标题：{m['topic']}",
-        f"- 口径条：{window} · EDAT 口径 · 命中 {m['hit_count']} 篇",
-        "",
-        "## M03 · 目录",
-        "- 01 检索策略 / 02 文献体量 / 03 来源期刊",
-        "- 04 时间趋势 / 05 主题分布 / 06 代表文献",
-        "",
-        "## M04 · 检索策略",
-        f"- 检索式：{m['query'] or '(未记录)'}",
-        f"- 时间窗口：{window}",
-        f"- 日期字段：{m['date_field']}",
-        f"- 口径说明：{n['date_field']}",
-        "",
-        "## M05 · 文献体量",
     ]
-    for k in c["kpis"]:
-        lines.append(f"- {k['label']}：{k['value']} {k['unit']}（{k['note']}）")
 
-    lines += ["", "## M06 · 来源期刊 Top 10"]
-    for j in c["journals"]:
-        lines.append(f"- {j['name']} — {j['count']} 篇（{j['share']}%）")
+    nth: Counter = Counter()
+    for layout, title in seq:
+        nth[layout] += 1
+        tag = LAYER.get(layout)
+        heading = f"## {layout} · {title}" + (f"　【{tag}】" if tag else "")
+        fn = OUTLINE_BLOCKS.get(layout)
+        body = fn(c, title, nth[layout], ctx) if fn else [f"- （{title}）"]
+        lines += [heading, *body, ""]
 
-    lines += ["", "## M07 · 时间趋势"]
-    for y in c["years"]:
-        lines.append(f"- {y['year']}：{y['count']} 篇")
-
-    lines += ["", "## M08 · 主题分布"]
-    for t in c["topics"]:
-        tag = "（核心词桶：覆盖 ≥80%，源自检索式核心词，不构成分布信号）" if t.get("scope") == "core" else ""
-        lines.append(f"- {t['key']} — {t['count']} 篇（{t['share']}%）{tag}")
-    lines.append(f"- 口径：{n['bucketing']}")
-    lines.append("- 绘图要求：分布图只呈现非核心词桶；核心词桶以脚注说明，不进入图形。")
-
-    lines += ["", "## M09 / M10 · 代表文献"]
-    for a in c["articles"]:
-        lines.append(f"- PMID {a['pmid']}｜{a['journal']}（{a['year'] or 'n.d.'}）｜{a['title']}｜入选理由：{a['reason']}")
-
-    lines += [
-        "",
-        "## M11 · 趋势判断与局限",
-        "- 趋势判断：依据 M07 与 M08 数据得出，不得脱离数据",
-        f"- 方法局限：{n['date_field']}；{n['bucketing']}",
-        "- 下一步：补检同义词、扩展时间窗、精读代表文献、寻找外部验证",
-        "",
-        "## M12 · 结论",
-        f"- 本次检索在 {window} 窗口内命中 {m['hit_count']} 篇文献，主题分布与时间趋势见前。",
-        "",
-        f"_{n['source']}_",
-        "",
-    ]
+    lines += [f"_{n['source']}_", ""]
     return "\n".join(lines)
 
 
@@ -428,12 +685,18 @@ def main() -> None:
     ap.add_argument("--max-results", default=2000, type=int, help="Requested result ceiling")
     ap.add_argument("--max-articles", default=8, type=int, help="Max representative articles")
     ap.add_argument("--topics-file", default=None, help="JSON {name: regex} overriding default buckets")
+    ap.add_argument("--review", default=None,
+                    help="Path to review_evidence.json. Embeds the systematic-review layer into "
+                         "deck_content.json and deck_outline.md so the deck -- and the PPT built "
+                         "from this outline -- carries the review's own findings. Run the review "
+                         "BEFORE this step: the review is the source, the deck is the rendering")
     ap.add_argument("--search-date", default=datetime.now().strftime("%Y-%m-%d"))
     args = ap.parse_args()
 
     content = build_content(args)
     json_path, md_path = write_outputs(content, args.out_dir)
 
+    rv = content.get("review")
     print(f"[deck] content model -> {json_path}")
     print(f"[deck] outline       -> {md_path}")
     print(
@@ -441,6 +704,9 @@ def main() -> None:
         f"{len(content['journals'])} journals | {len(content['years'])} years | "
         f"{len(content['topics'])} topics | {len(content['articles'])} articles"
     )
+    print(f"[deck] outline pages : {len(page_sequence(content))}"
+          + (f"  (review layer: {', '.join(content['meta']['review_layers'])})"
+             if rv else "  (descriptive layer only -- no review)"))
 
 
 if __name__ == "__main__":

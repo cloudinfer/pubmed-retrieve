@@ -1,16 +1,41 @@
 ---
 name: pubmed-retrieve
-description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, produces a summary table and analysis report, and automatically renders the results into an academic report deck (single-file HTML slides plus an editable PPTX) and a journal-grade systematic review draft in a medical deep-blue Swiss grid style — no further user request needed for Phase 5 and Phase 6.
+description: Use whenever the user wants to search for or retrieve literature in biomedicine and clinical medicine — including but not limited to clinical trials, systematic reviews, meta-analyses, evidence-based medicine, drug and treatment research, surgery, internal medicine, cardiology, oncology, neurology, psychiatry, pediatrics, obstetrics & gynecology, emergency medicine, radiology, pathology, nursing, public health, epidemiology, genetics, immunology, microbiology, pharmacology, physiology, anatomy, or any other life-sciences discipline. Generates a PubMed query, executes the search, produces a summary table and analysis report, then automatically composes a journal-grade systematic review draft in a medical deep-blue Swiss grid style, and only afterwards renders the academic report deck (single-file HTML slides plus an editable PPTX) out of that review — no further user request needed for Phase 5 and Phase 6.
 ---
 
 # PubMed Retrieve Skill
 
 根据用户需求生成 PubMed 检索式，调用 `scripts/` 下的脚本执行检索，生成文献汇总表；
-随后**自动**把检索结果渲染成学术汇报 deck（单文件 HTML + 可编辑 PPTX），
-并**自动**编制期刊发表级系统综述草稿（Phase 5 / Phase 6 无需用户再次要求，检索完成即串联执行）。
+随后**自动**编制期刊发表级系统综述草稿，**再自动**把综述（而非仅检索统计）渲染成学术汇报 deck
+（单文件 HTML + 可编辑 PPTX）——Phase 5 / Phase 6 无需用户再次要求，检索完成即按序串联执行。
 
-> **执行契约**：Phase 1–4 完成后，Agent 必须不经询问直接继续 Phase 5 与 Phase 6。
-> 仅当用户在本次请求中**明确表示不要** deck / 综述时才跳过对应阶段，并向用户说明已跳过。
+> **执行契约**：Phase 1–4 完成后，Agent 必须不经询问直接继续 Phase 5（系统综述）与
+> Phase 6（deck）。**顺序不可颠倒**，理由见下节。
+> 仅当用户在本次请求中**明确表示不要**综述 / deck 时才跳过对应阶段，并向用户说明已跳过。
+
+## 阶段顺序（先综述、后 deck，不可颠倒）
+
+```
+Phase 1–4   检索与解读           → pubmed_results.csv + 分析报告
+Phase 5     系统综述             → review_evidence.json + review_draft.md + .docx
+Phase 6     deck                 → deck_content.json(含综述层) + HTML deck + .pptx
+```
+
+这不是风格偏好，而是**数据依赖**：
+
+- deck 的综述层（M13 PICOS、M14 PRISMA、M15 证据等级、M16 收敛、M17 空白与议程、
+  M18 结论、M19 定量性能、M20 核心发现）**全部由 `review_evidence.json` 派生**。
+  其中 M13 的人群描述直接取自证据底座的 `meta.picos`。
+- `deck_outline.md`——**交给 PPT 环节的唯一素材**——在 deck 阶段写出。
+  因此「先出 deck、再补综述页」必然导致 PPT 素材缺整层综述；
+  更糟的是 M13 会退回渲染器里的硬编码人群（真实案例：一篇影像组学 deck 的 PICOS 页
+  显示「肝细胞癌患者，不限分期与治疗方式」，与本主题无关，也与同批综述正文相互矛盾）。
+- 反向只需一次：综述做完再跑 deck，`deck_content.json` / `deck_outline.md` / HTML / `.pptx`
+  同时获得综述层，且四者同源。
+
+**唯一允许的例外**：用户明确只要 deck（不要综述）。此时 deck 退化为纯描述性版本，
+`deck_outline.md` 会显式标注「综述层：缺失」，`deck_validate.py` 不做综述层完备性检查
+（若强行混入部分综述页，F14 会阻断）。
 
 ## 路径约定
 
@@ -18,9 +43,9 @@ description: Use whenever the user wants to search for or retrieve literature in
 
 | 子目录 | 内容 |
 |--------|------|
-| `scripts/` | `pubmed_cli.py`（检索 CLI）、`pubmed_script.py`（E-utilities 实现）、`deck_content.py` / `deck_build.py` / `deck_validate.py`（Phase 5 deck 链路）、`review_evidence.py` / `review_compose.py` / `review_check.py`（Phase 6 综述链路） |
+| `scripts/` | `pubmed_cli.py`（检索 CLI）、`pubmed_script.py`（E-utilities 实现）、`review_evidence.py` / `review_compose.py` / `review_check.py`（Phase 5 综述链路）、`deck_content.py` / `deck_build.py` / `deck_validate.py`（Phase 6 deck 链路） |
 | `assets/deck/` | `template-medical.html`（医学深蓝瑞士风单文件 deck 模板） |
-| `references/` | `deck-theme.md`（配色/字号/网格规范）、`deck-layouts.md`（M01–M20 版式契约）、`review-standard.md`（期刊门槛与语言禁忌）、`review-criteria.md`（**纳入标准/PICOS 定制指南，Phase 6 必读**） |
+| `references/` | `deck-theme.md`（配色/字号/网格规范）、`deck-layouts.md`（M01–M20 版式契约）、`review-standard.md`（期刊门槛与语言禁忌）、`review-criteria.md`（**纳入标准/PICOS 定制指南，Phase 5 必读**） |
 
 常见安装位置：
 
@@ -312,139 +337,29 @@ for p in ["42759982", "42721921", "42670019"]:
 在答复中复述：命中量、时间口径（EDAT）、关键分布数字、主要趋势，
 并说明"PubMed 仅提供题录与摘要元数据，全文需经 DOI 跳转出版商"。
 
-Phase 4 完成后**不要停下等待用户指示**，直接进入 Phase 5（deck）与 Phase 6（系统综述）。
+Phase 4 完成后**不要停下等待用户指示**，直接进入 **Phase 5（系统综述）**，
+完成后再进入 Phase 6（deck）。顺序见「阶段顺序」一节。
 
 ---
 
-### Phase 5: 生成学术汇报 PPT（自动执行，无需用户要求）
+### Phase 5: 编制期刊发表级系统综述（自动执行，先于 deck）
 
-检索完成即自动执行本阶段。把检索结果转成一份**可汇报的学术 deck**。
-视觉方向固定为 **「医学专业 + 科研科技」**，
-采用**瑞士国际主义**方法论（16 列网格、直角色块、1px 发丝线、极致字号对比、
-无阴影无渐变无圆角），主色**医学深蓝 `#0A3D7C`**。
+Phase 4 完成后自动进入本阶段。在检索结果之上，编制一份**可投稿级别**的系统综述。
+与 Phase 6 的分工：Phase 5 回答「这些证据支持什么、缺什么、证据有多可靠」（系统性综合）；
+Phase 6 回答「检索到了什么、结论长什么样」（把本阶段的结论渲染成可汇报的页面）。
+**Phase 5 必须有自己的分析主题、证据分级与收敛汇总，不得复用 Phase 6 的描述性主题桶。**
 
-设计依据（**生成前必读，不要凭记忆发挥**）：
+本阶段的产物是 Phase 6 的**输入**，两个文件缺一不可：
 
-| 文件 | 内容 |
+| 产物 | 用途 |
 |------|------|
-| `references/deck-theme.md` | 调色板白名单、字体栈、网格与安全边距、字号阶梯、禁止清单 F01–F12 |
-| `references/deck-layouts.md` | M01–M20 锁定版式契约、`deck_content.json` 字段定义、内容映射与写作规则 |
-
-**交付两件**：① 单文件 HTML deck（高保真、可翻页演示、可打印为 PDF）；② 可编辑 `.pptx`。
-
-#### 5.1 生成内容模型 `deck_content.json`
-
-```bash
-PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"   # 见 Phase 0
-
-"$PY" "<SKILL_DIR>/scripts/deck_content.py" \
-  --csv "<workspace>/pubmed_results.csv" \
-  --out-dir "<workspace>/output" \
-  --topic "<检索主题，≤30 字>" \
-  --query-file "<workspace>/.workbuddy/tmp_query.txt" \
-  --start "2021/01/01" --end "2026/10/02" --max-results 2000 \
-  --search-date "<今天 YYYY-MM-DD>"
-```
-
-产出 `output/deck_content.json`（唯一数据源）与 `output/deck_outline.md`（逐页大纲，
-同时是交给 PPT 生成环节的素材）。
-
-**主题分桶必须针对本次检索定制**：脚本内置的是通用默认桶，
-先跑一轮看各桶占比，再用 `--topics-file buckets.json` 传入定制桶（JSON 对象 `{"桶名": "正则"}`）。
-**所有短词/缩写一律加 `\b`。**
-
-> ⚠️ **不要用检索式的核心词做分桶**。核心词（如 radiomics 检索里的 radiomics）
-> 会命中 90% 以上的文献，桶占比接近 100%，不构成任何分布信号。
-> 脚本会把占比 ≥ 80% 的桶自动标记为 `scope: "core"`，分布图只画 `specific` 桶，
-> 核心词桶降级为脚注说明。定桶时同理：桶的正则应该是**区分性特征**
-> （方法学、研究设计、技术分支），而不是主题本身。
-
-#### 5.2 渲染单文件 HTML deck
-
-```bash
-"$PY" "<SKILL_DIR>/scripts/deck_build.py" \
-  --content "<workspace>/output/deck_content.json" \
-  --out "<workspace>/output/<主题>_deck.html"
-```
-
-输出为**静态单文件 HTML**：无 CDN、无外部字体、无图表库，图表全部是内联 SVG。
-翻页运行时已内置：`← / →`、`Home / End`、`空格`、滚轮、触屏滑动、底部页码块跳转、
-`G` 打开页格索引、`Esc` 关闭。`Ctrl+P` 可直接打印为 PDF（每页一张）。
-
-#### 5.3 运行版式校验（强制）
-
-```bash
-"$PY" "<SKILL_DIR>/scripts/deck_validate.py" "<workspace>/output/<主题>_deck.html"
-```
-
-- **P0 必须为 0** 才可交付；存在 P0 时先修 HTML 再重新校验，**不得直接交付**。
-- P1 需逐条确认；需要放宽时在答复中说明理由，必要时加 `--strict` 让 P1 也阻断。
-- P0 覆盖：调色板外颜色、圆角/阴影/渐变、字号 < 13px、外部资源引用、未知版式。
-- P1 覆盖：禁用字重与斜体、标题居中、页眉页脚页码缺失、警示色超限、文献卡片超 4 张。
-
-#### 5.4 生成可编辑 `.pptx`
-
-HTML deck 是视觉稿；**默认必须产出**可编辑 `.pptx`（无需用户另行要求），
-**按平台规范交由 `tencent-pptx` 技能生成**，
-不要用脚本硬转。输入材料用 `output/deck_outline.md`（或 `deck_content.json`），
-并要求其遵守同一套医学深蓝规范：
-
-> 医学专业 + 科研科技视觉方向；主色医学深蓝 `#0A3D7C`；
-> 瑞士网格版式：16 列网格、直角色块、1px 发丝线、无阴影、无渐变、无圆角；
-> 字号阶梯见 `references/deck-theme.md`；页面顺序与每页内容见 `deck_outline.md`；
-> 标题一律左对齐贴网格线，不居中。
-
-##### ⚠️ SlideDSL 写入与校验的四个高频坑
-
-`.pptx` 由平台的 `slidep` 工具链按页写入（`upsert-dsl --page-index <0基>`，
-省略或 `-1` 表示追加）。以下四点都是实际踩过的：
-
-1. **`upsert-dsl` 会静默失败。** 它可能返回 `Error: /localapi/keyframe HTTP 500:
-   presentation is not open`，而**批量循环不会因此中断**——后续每一页都退化成「追加」，
-   最终页序全乱。**写入后必须回读校验页序**：解析 `.pptx` 的
-   `ppt/slides/slide{N}.xml` 中 `<a:t>` 文本，逐页比对标题是否与 `deck_outline.md` 一致。
-   发现错位时**重建尾部**：先追加最后一页，再用 `--page-index` 从后往前逐页覆盖。
-2. **元素不得溢出父容器。** 条形图的宽度要留出父容器余量，
-   否则 lint 报 P0 `child containment overflow`（实测 `right+89px` / `+91px` / `+79px`）。
-   竖向同理，表格行 `padding` 过大或段落过长会报 `Bottom+36px`。
-   压缩手段：减小条宽、收 `padding`、降 `lineHeight`、删冗余句。
-3. **不是所有 CSS 属性都支持。** `marginTop: 'auto'` 与 `lineSpacing` 会让 lint 失败；
-   改用 `justifyContent: 'space-between'` 等 flex 属性实现同效果。
-   版式仅支持 flexbox（**无 grid、无 `calc()`**），画布固定 1280×720，
-   换行用 `<br />`，行内样式用 `<span style>`，**不支持 `<strong>` / `<em>`**。
-4. **`slidep screenshot` 在 Windows 上不可用**（报
-   `The argument 'filename' must be a file URL object`，疑似要求 Linux 路径）。
-   改用**直接解析 `.pptx` XML** 来验收内容与页序，不要卡在截图上。
-
-#### 5.5 提交
-
-用 `present_files` **一次性**展示 HTML deck 与 `.pptx`，并在答复中说明：
-命中量、时间口径（EDAT）、deck 页数、校验结果（P0/P1/P2 计数）、
-以及主题分桶可多重归类的口径提示。
-
-> **一键串联**：`pubmed_cli.py` 加了 `--deck` / `--deck-topic` 参数，
-> 检索完成后自动跑 5.1 + 5.2，可省去手工调用：
-> ```bash
-> "$PY" "<SKILL_DIR>/scripts/pubmed_cli.py" -f query.txt -s "2021/01/01" -e "2026/10/02" \
->   -o "<workspace>/output/pubmed_results.csv" \
->   --deck --deck-topic "radiomics 在肝细胞癌预后预测中的应用"
-> ```
-> 校验（5.3）与 `.pptx`（5.4）仍需单独执行。
-
----
-
-### Phase 6: 编制期刊发表级系统综述（自动执行，无需用户要求）
-
-Phase 5 完成后自动进入本阶段。在检索结果之上，编制一份**可投稿级别**的系统综述，
-并同步扩展 deck 与 PPT。
-与 Phase 5 的分工：Phase 5 回答「检索到了什么」（描述性统计）；
-Phase 6 回答「这些证据支持什么、缺什么、证据有多可靠」（系统性综合）。
-Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得复用 Phase 5 的描述性主题桶**。
+| `review_evidence.json` | 计数、分级、收敛、空白、定量信号、`meta.picos` —— Phase 6 综述层的**唯一数据源** |
+| `review_draft.md` | 综述正文（叙述性综合），也是最终 `.docx` 的源 |
 
 凡声明「要可发表」「要期刊水平」「要投稿」，一律按 `references/review-standard.md`
 执行；未达门槛不得交付。
 
-#### 6.1 定制纳入标准 → 构建证据底座
+#### 5.1 定制纳入标准 → 构建证据底座
 
 > **Step 0（必做，不可跳过）：先按本次主题改写纳入标准与 PICOS。**
 >
@@ -452,7 +367,7 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
 > 肝细胞癌专用规则**（`POP_IN` / `OTHER_PRIMARY` / PICOS 措辞）。把它用在其他主题上
 > **不会报错**——它只会静默排除几乎全部记录。真实案例：一次「影像组学」检索命中 395 条，
 > 用内置标准后「潜在纳入」只剩 **14 条**（误排除 374 条，占 95%）；综述骨架里还出现了
-> 「经病理或临床标准确诊的肝细胞癌患者」和 EphA2 受体。
+> 「经病理或临床确诊的肝细胞癌患者」和 EphA2 受体。
 >
 > 为此两个脚本都加了**守卫**：当主题不含肝脏关键词（`hepat` / `hcc` / `liver` / `hepatic` / 肝）
 > 且未提供定制文件时，脚本**直接中止（exit 2）**，并在输出目录生成可编辑的模板：
@@ -468,13 +383,20 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
   --topic "<检索主题>" \
   --query-file "<workspace>/.workbuddy/tmp_query.txt" \
   --criteria-file "<workspace>/output/criteria.json" \
+  --picos-file "<workspace>/output/picos.json" \
   --themes-file "<workspace>/output/themes.json" \
   --start "2021/01/01" --end "2026/10/02" --max-results 2000 \
   --search-date "<今天 YYYY-MM-DD>"
 ```
 
+`--criteria-file` 与 `--picos-file` 在这里**都要给**：前者管**筛选判据**（正则），
+后者管**成文措辞**（PICO 表、纳入排除标准表、关键词）。PICOS 会被写入
+`meta.picos` / `meta.picos_source`，Phase 6 的 deck 直接读取它渲染 M13 页——
+deck 因此**不可能**写出与本综述不同的人群描述。
+
 产出 `review_evidence.json`（PRISMA 计数、证据等级、定量信号、文献矩阵、收敛汇总、
-研究空白；另记 `meta.criteria_source` 以便复核用了哪套判据）与 `review_corpus.md`（代表文献摘要集）。
+研究空白；另记 `meta.criteria_source` / `meta.picos` 以便复核用了哪套判据）与
+`review_corpus.md`（代表文献摘要集）。
 
 **筛选量级自检**：跑完先看 `eligible` 占 `identified` 的比例。
 若低于一半，多半是判据过紧或主题词没对齐，**先查判据再往下走**，不要直接交付。
@@ -487,7 +409,7 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
 - **PROBAST / GRADE 表留空**：必须基于全文评估，**不得用摘要推断填充**。
 - **收敛指标在全量文献池计算**：不在精选语料上算，避免抽样偏倚。
 
-#### 6.2 生成综述骨架（确定性内容全部由脚本产出）
+#### 5.2 生成综述骨架（确定性内容全部由脚本产出）
 
 ```bash
 "$PY" "<SKILL_DIR>/scripts/review_compose.py" \
@@ -496,10 +418,6 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
   --out-dir "<workspace>/output" --topic "<检索主题>" \
   --picos-file "<workspace>/output/picos.json" [--regno "CRD4202xxxx"]
 ```
-
-`--picos-file` 与上一步的 `--criteria-file` 是**两套必须同时提供的文件**，缺一不可：
-前者管**筛选判据**（正则），后者管**成文措辞**（PICO 表、纳入排除标准表、关键词）。
-两者都留痕：PICOS 来源写入 §2.1，判据来源写入 `review_evidence.json`。
 
 脚本自动写入**全部可从 CSV 确定性派生的内容**：中英题名与摘要的数字部分、
 PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布表、
@@ -515,7 +433,7 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
 只有**叙述性综合**留作 `WRITE-BLOCK`，每个块带明确任务描述、字数区间与**必引 PMID 清单**。
 写作因此是有约束的填空，不是自由发挥。
 
-#### 6.3 撰写叙述部分
+#### 5.3 撰写叙述部分
 
 逐块填写 `review_draft.md` 中的 `WRITE-BLOCK`，填写后整块删除注释。要求：
 
@@ -524,7 +442,7 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
 - 严格遵循 `references/review-standard.md` 的语言禁忌（禁绝对化表述、禁 vibe citing）；
 - PROBAST / GRADE / 待提取字段一律保持「待评估」「待提取」，不得提前填值。
 
-#### 6.4 期刊门槛质检（P0 必须为 0 才能交付）
+#### 5.4 期刊门槛质检（P0 必须为 0 才能交付）
 
 ```bash
 "$PY" "<SKILL_DIR>/scripts/review_check.py" "<workspace>/output/<综述>.md" \
@@ -548,7 +466,7 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
 > 注意核对表在**附录 A**（位于参考文献之后），因此 `review_check.py` 用全文而非
 > `split_body()` 之后的正文做这项检查——否则会漏检整张核对表。
 
-#### 6.5 排版为可编辑文档
+#### 5.5 排版为可编辑文档
 
 走 `tencent-docx` 将 Markdown 排版为论文格式 `.docx`（标题层级、中英题名、
 结构化摘要、表格、参考文献悬挂缩进）。
@@ -561,7 +479,7 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
    源 Markdown 里表题位于**表格之前**的整行加粗段落（`**表 3　纳入研究基本特征**`），
    生成 HTML/Word 时需**向前看一行**取表题，取不到时保留表题缺失状态而不是自造编号。
 2. **不得改动正文内容。** 排版只负责版式；发现内容层问题（如交叉引用错误）
-   应回到 6.2/6.3 修源文件，而不是在 HTML/Word 里就地改字。
+   应回到 5.2/5.3 修源文件，而不是在 HTML/Word 里就地改字。
 
 > **Windows 环境绕行**：`tencent-docx` 的 `scripts/wb/local/setup-html-to-docx.sh`
 > 使用 Linux 布局的 `<venv>/bin/python` 判定依赖，在 Windows 上会**静默跳过安装**，
@@ -572,39 +490,170 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
 >   --only-binary=:all: -r "<tencent-docx>/skills/html-to-docx/scripts/requirements.txt"
 > ```
 
-#### 6.6 扩展 deck 与 PPT
+#### 5.6 提交（中间节点，非终点）
 
-HTML deck 追加 M13–M18 综述页：
+用 `present_files` 展示系统综述 `.docx` 与 Markdown 源。
+**不要在此时停下**——deck 与 PPT 仍依赖本阶段产物，直接进入 Phase 6，
+把 `review_evidence.json` 一并交给下一阶段。
 
-| 页码 | 版式 | 内容 |
-|------|------|------|
-| M13 | PICOS | 研究问题与纳入标准 |
-| M14 | PRISMA Flow | 筛选流程漏斗 |
-| M15 | Evidence Levels | 证据等级分布 |
-| M16 | Convergence | 证据收敛汇总 |
-| M17 | Gaps & Agenda | 研究空白与研究议程 |
-| M18 | Review Closing | 综述结论与边界 |
+---
+
+### Phase 6: 生成学术汇报 deck（自动执行，含综述层）
+
+Phase 5 完成后自动进入本阶段。把**综述**（而非仅检索统计）转成一份可汇报的学术 deck。
+视觉方向固定为 **「医学专业 + 科研科技」**，
+采用**瑞士国际主义**方法论（16 列网格、直角色块、1px 发丝线、极致字号对比、
+无阴影无渐变无圆角），主色**医学深蓝 `#0A3D7C`**。
+
+设计依据（**生成前必读，不要凭记忆发挥**）：
+
+| 文件 | 内容 |
+|------|------|
+| `references/deck-theme.md` | 调色板白名单、字体栈、网格与安全边距、字号阶梯、禁止清单 F01–F15 |
+| `references/deck-layouts.md` | M01–M20 锁定版式契约、`deck_content.json` 字段定义、内容映射与写作规则 |
+
+**交付两件**：① 单文件 HTML deck（高保真、可翻页演示、可打印为 PDF）；② 可编辑 `.pptx`。
+
+#### 6.1 生成内容模型 `deck_content.json`（必须带 `--review`）
+
+```bash
+PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"   # 见 Phase 0
+
+"$PY" "<SKILL_DIR>/scripts/deck_content.py" \
+  --csv "<workspace>/output/pubmed_results.csv" \
+  --out-dir "<workspace>/output" \
+  --topic "<检索主题，≤30 字>" \
+  --query-file "<workspace>/.workbuddy/tmp_query.txt" \
+  --review "<workspace>/output/review_evidence.json" \
+  --start "2021/01/01" --end "2026/10/02" --max-results 2000 \
+  --search-date "<今天 YYYY-MM-DD>"
+```
+
+产出 `output/deck_content.json`（唯一数据源）与 `output/deck_outline.md`（逐页大纲，
+**同时是交给 PPT 环节的唯一素材**）。
+
+**`--review` 是本阶段的必需参数，不是可选项。** 它把 Phase 5 的证据底座
+（PRISMA 计数、证据等级、收敛汇总、研究空白、定量信号、`meta.picos`）
+以精简形态写入 `deck_content.json` 的 `review` 块，并据此渲染大纲中的
+**8 页综述层**。不传时 outline 会显式标注「综述层：缺失」，
+此时交付给 PPT 环节的素材就不含任何综述内容——这正是要避免的情况。
+
+deck 的页面构成分三层，综述层按**叙事位置插入**描述层，不追加在末尾：
+
+| 层 | 版式 | 页面 | 数据来源 |
+|----|------|------|----------|
+| 口径层 | M01 / M03 / M04 | 封面、目录、检索策略 | 检索元数据 |
+| **综述层** | **M13 / M14** | **研究问题与 PICOS、PRISMA 筛选流程** | `meta.picos`、`prisma` |
+| 描述层 | M05 / M06 / M07 / M08 / M09 / M10 | 体量、期刊、趋势、主题分布、代表文献、方向对照 | 检索统计 |
+| **综述层** | **M15** | **证据等级分布** | `levels` |
+| **综述层** | **M16 / M17 / M19 / M20** | **收敛汇总、空白与议程、定量性能、核心发现** | `matrix`、`gaps`、`numbers` |
+| 收束层 | M11 / M18 / M12 | 趋势与局限、综述结论、结论 | 描述层 + 综述层 |
+
+综述层页面**一律由证据底座派生**，渲染器内不得写死结论：
+
+- M13 的 P/O/I/C/S 五行取自 `review_evidence.json` → `meta.picos`；
+  缺失时页面显示占位符，`deck_validate.py` 的 F15 会阻断。
+- M17 的「议程建议」由 `gaps` 按 `priority` 排序后取 `implication` 生成。
+- M20 的四条「核心发现」由 `convergence` / `levels` / `numbers` / `prisma` 现算。
+- M15 / M16 / M18 / M19 同理，全部读 `review_evidence.json`。
+
+> 历史教训：这些页面曾经是渲染器里的字符串字面量。换主题后，一篇影像组学 deck 的
+> PICOS 页仍显示「肝细胞癌患者」，核心发现里仍出现「MVI 预测」「TACE 应答预测」。
+> 派生之后，deck 只可能陈述综述真正测到的内容。
+
+**主题分桶必须针对本次检索定制**：脚本内置的是通用默认桶，
+先跑一轮看各桶占比，再用 `--topics-file buckets.json` 传入定制桶（JSON 对象 `{"桶名": "正则"}`）。
+**所有短词/缩写一律加 `\b`。**
+
+> ⚠️ **不要用检索式的核心词做分桶**。核心词（如 radiomics 检索里的 radiomics）
+> 会命中 90% 以上的文献，桶占比接近 100%，不构成任何分布信号。
+> 脚本会把占比 ≥ 80% 的桶自动标记为 `scope: "core"`，分布图只画 `specific` 桶，
+> 核心词桶降级为脚注说明。定桶时同理：桶的正则应该是**区分性特征**
+> （方法学、研究设计、技术分支），而不是主题本身。
+
+#### 6.2 渲染单文件 HTML deck
 
 ```bash
 "$PY" "<SKILL_DIR>/scripts/deck_build.py" \
   --content "<workspace>/output/deck_content.json" \
-  --review "<workspace>/output/review_evidence.json" \
   --out "<workspace>/output/<主题>_deck.html"
+```
+
+综述层已内嵌在 `deck_content.json` 中，**无需再传 `--review`**（重复传入时以显式文件为准，
+两者通常就是同一份 JSON）。
+
+输出为**静态单文件 HTML**：无 CDN、无外部字体、无图表库，图表全部是内联 SVG。
+翻页运行时已内置：`← / →`、`Home / End`、`空格`、滚轮、触屏滑动、底部页码块跳转、
+`G` 打开页格索引、`Esc` 关闭。`Ctrl+P` 可直接打印为 PDF（每页一张）。
+
+#### 6.3 运行版式校验（强制）
+
+```bash
 "$PY" "<SKILL_DIR>/scripts/deck_validate.py" "<workspace>/output/<主题>_deck.html" --strict
 ```
 
-`.pptx` 以 `deck_outline.md` + 综述章节为素材，走 PPT 能力产出，补充研究问题、
-PRISMA 流程、证据分级、收敛汇总、空白与展望、结论页。
+- **P0 必须为 0** 才可交付；存在 P0 时先修 HTML 再重新校验，**不得直接交付**。
+- P1 需逐条确认；需要放宽时在答复中说明理由，必要时加 `--strict` 让 P1 也阻断。
+- P0 覆盖：调色板外颜色、圆角/阴影/渐变、字号 < 13px、外部资源引用、未知版式。
+- P1 覆盖：禁用字重与斜体、标题居中、页眉页脚页码缺失、警示色超限、文献卡片超 4 张、
+  **F14 综述层不完整（有 M13 却缺 M14/M18）**、**F15 M13 的 PICOS 为占位内容**。
 
-#### 6.7 提交
+> F14 / F15 是专为「deck 与综述脱节」加的：F14 在人工删改 HTML 导致综述页残缺时报错，
+> F15 在证据底座未携带 PICOS（M13 退回占位符）时报错。二者都是 P1，
+> **配合 `--strict` 即成为交付阻断**。
 
-用 `present_files` 一次性展示：系统综述 `.docx`、Markdown 源文件、
+#### 6.4 生成可编辑 `.pptx`
+
+HTML deck 是视觉稿；**默认必须产出**可编辑 `.pptx`（无需用户另行要求），
+**按平台规范交由 `tencent-pptx` 技能生成**，
+不要用脚本硬转。输入材料用 `output/deck_outline.md`（**已含综述层**）或 `deck_content.json`，
+并要求其遵守同一套医学深蓝规范：
+
+> 医学专业 + 科研科技视觉方向；主色医学深蓝 `#0A3D7C`；
+> 瑞士网格版式：16 列网格、直角色块、1px 发丝线、无阴影、无渐变、无圆角；
+> 字号阶梯见 `references/deck-theme.md`；页面顺序与每页内容见 `deck_outline.md`；
+> 标题一律左对齐贴网格线，不居中。
+
+**PPT 必须覆盖 `deck_outline.md` 的全部页面，其中标注「【综述层】」的 8 页不得省略。**
+若 PPT 页数与 outline 页数不一致，以 outline 为准补齐，并在答复中说明差异原因。
+
+##### ⚠️ SlideDSL 写入与校验的四个高频坑
+
+`.pptx` 由平台的 `slidep` 工具链按页写入（`upsert-dsl --page-index <0基>`，
+省略或 `-1` 表示追加）。以下四点都是实际踩过的：
+
+1. **`upsert-dsl` 会静默失败。** 它可能返回 `Error: /localapi/keyframe HTTP 500:
+   presentation is not open`，而**批量循环不会因此中断**——后续每一页都退化成「追加」，
+   最终页序全乱。**写入后必须回读校验页序**：解析 `.pptx` 的
+   `ppt/slides/slide{N}.xml` 中 `<a:t>` 文本，逐页比对标题是否与 `deck_outline.md` 一致。
+   发现错位时**重建尾部**：先追加最后一页，再用 `--page-index` 从后往前逐页覆盖。
+2. **元素不得溢出父容器。** 条形图的宽度要留出父容器余量，
+   否则 lint 报 P0 `child containment overflow`（实测 `right+89px` / `+91px` / `+79px`）。
+   竖向同理，表格行 `padding` 过大或段落过长会报 `Bottom+36px`。
+   压缩手段：减小条宽、收 `padding`、降 `lineHeight`、删冗余句。
+3. **不是所有 CSS 属性都支持。** `marginTop: 'auto'` 与 `lineSpacing` 会让 lint 失败；
+   改用 `justifyContent: 'space-between'` 等 flex 属性实现同效果。
+   版式仅支持 flexbox（**无 grid、无 `calc()`**），画布固定 1280×720，
+   换行用 `<br />`，行内样式用 `<span style>`，**不支持 `<strong>` / `<em>`**。
+4. **`slidep screenshot` 在 Windows 上不可用**（报
+   `The argument 'filename' must be a file URL object`，疑似要求 Linux 路径）。
+   改用**直接解析 `.pptx` XML** 来验收内容与页序，不要卡在截图上。
+
+#### 6.5 提交
+
+用 `present_files` **一次性**展示：系统综述 `.docx`、Markdown 源文件、
 HTML deck、`.pptx`、`review_evidence.json` 与 `pubmed_results.csv`。
+并在答复中说明：
 
-答复中须说明：这是**全文复核前**的证据图谱；计数、分级与定量汇总均基于题录与摘要；
-PROBAST 与 GRADE 尚未完成，已以占位表列出；所有引用 PMID 均可回查 CSV。
+- 命中量、时间口径（EDAT）；
+- 这是**全文复核前**的证据图谱；计数、分级与定量汇总均基于题录与摘要；
+- PROBAST 与 GRADE 尚未完成，已以占位表列出；
+- 所有引用 PMID 均可回查 CSV；
+- deck 页数与校验结果（P0/P1/P2 计数），并说明综述层已包含在 deck 与 PPT 中；
+- 主题分桶可多重归类的口径提示。
 
-> **一键串联**：
+> **一键串联**：`pubmed_cli.py` 加了 `--deck` / `--review` / `--full` 参数。
+> `--full` 的执行顺序为 **检索 → 综述（证据底座 + 骨架）→ deck（含综述层）**：
 > ```bash
 > "$PY" "<SKILL_DIR>/scripts/pubmed_cli.py" -f query.txt -s "2021/01/01" -e "2026/10/02" \
 >   -o "<workspace>/output/pubmed_results.csv" \
@@ -612,9 +661,8 @@ PROBAST 与 GRADE 尚未完成，已以占位表列出；所有引用 PMID 均�
 >   --review-themes-file output/themes.json \
 >   --full --deck-topic "<检索主题>"
 > ```
-> `--full` = 检索 → HTML deck（含 M13–M20）→ 证据底座 → 综述骨架 + 参考文献 + 引用映射，
-> 并打印下一步的质检命令。其后仍需：填写 WRITE-BLOCK（6.3）→ 质检（6.4）→
-> 排版 `.docx`（6.5）→ 产出 `.pptx`（6.6）。
+> 其后仍需：填写 WRITE-BLOCK（5.3）→ 质检（5.4）→ 排版 `.docx`（5.5）；
+> deck 侧还需 6.3 校验与 6.4 产出 `.pptx`。
 >
 > `--full` 走的是**同一条纳入标准守卫**，且守卫**在检索发起前**执行：
 > 判据不合规时该命令直接以 exit 2 中止，`-o` 指定的旧 CSV 与 deck 内容模型**不会被覆盖**。
@@ -628,10 +676,10 @@ pip install requests pandas
 ```
 
 WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就绪。
-Phase 5 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **只用标准库 + pandas**,
-不引入新依赖；`.pptx` 由平台 PPT 能力产出，脚本侧不需要 `python-pptx`。
-Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同样只用标准库 + pandas。
+Phase 5 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 只用标准库 + pandas；
 综述排版 `.docx` 走平台文档能力。
+Phase 6 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **同样只用标准库 + pandas**,
+不引入新依赖；`.pptx` 由平台 PPT 能力产出，脚本侧不需要 `python-pptx`。
 
 ## 注意事项
 
@@ -642,26 +690,37 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
 5. **结果上限**: PubMed E-utilities 单次最多返回约 10,000 条
 6. **日期格式**: 严格使用 `YYYY/MM/DD`
 7. **PMID 校验**: 引用前必须回查，杜绝编造
-8. **deck 配色是白名单**: Phase 5 的颜色、字号、版式都锁死在规范文件里，
-   不得临时自定义 hex；版式全集为 M01–M20，其中 M13–M20 为综述页（启用 `--review` 后生成）。
+8. **阶段顺序不可颠倒**: **Phase 5（系统综述）必须先于 Phase 6（deck）完成**。
+   deck 的综述层全部派生自 `review_evidence.json`，而交给 PPT 环节的
+   `deck_outline.md` 在 deck 阶段写出；先出 deck 再补综述，PPT 素材必然缺整层综述，
+   M13 也会退回文档里写死的人群描述。
+9. **deck 配色是白名单**: Phase 6 的颜色、字号、版式都锁死在规范文件里，
+   不得临时自定义 hex；版式全集为 M01–M20，其中 M13–M20 为综述层页面。
    改配色必须同步改 `references/deck-theme.md` 与 `assets/deck/template-medical.html` 的 `:root`
-9. **deck 校验门槛**: `deck_validate.py` 的 P0 必须为 0 才能交付
-10. **Phase 6 证据分级为暂定**: 研究设计与证据等级由摘要中报告的方法学信息自动推断，
+10. **deck 校验门槛**: `deck_validate.py` 的 P0 必须为 0 才能交付；
+    建议直接加 `--strict`，让 F14/F15（综述层残缺、PICOS 占位）也成为阻断
+11. **综述层必须派生、不得写死**: M13/M15/M16/M17/M18/M19/M20 的内容一律从
+    `review_evidence.json` 现算。文献渲染器里**不得出现任何主题专属的疾病名、终点名或人群描述**——
+    这类字面量换主题后不会报错，只会悄悄输出错误结论。
+12. **Phase 5 证据分级为暂定**: 研究设计与证据等级由摘要中报告的方法学信息自动推断，
     全文复核后应更新；PROBAST、GRADE 与 RoB 评估需人工完成，不得用推断填充
-11. **题录筛选不等于全文筛选**: PRISMA 流程中的「潜在纳入」是题录层面的计数，
+13. **题录筛选不等于全文筛选**: PRISMA 流程中的「潜在纳入」是题录层面的计数，
     真正的「已纳入」必须在全文复核后确定
-12. **Phase 5/6 自动串联**: 检索完成后 deck（HTML + PPTX）与系统综述草稿**默认自动执行**，
+14. **Phase 5/6 自动串联**: 检索完成后先系统综述、再 deck（HTML + PPTX），**默认自动执行**，
     不询问用户；仅当用户本次请求明确不要时才跳过，并在答复中说明。
-13. **纳入标准必须按主题定制**: `--criteria-file` 与 `--picos-file` 是**必填项**。
+15. **纳入标准必须按主题定制**: `--criteria-file` 与 `--picos-file` 是**必填项**。
     脚本内置的是肝细胞癌专用判据，用于其他主题会静默误排除；
     非肝脏主题未提供定制文件时脚本**直接中止（exit 2）**并生成模板，
     这是有意为之的保护，不要用 `--allow-default-*` 绕过。
     跑完先核对 `eligible / identified` 比例（正常约 80%，过低说明判据没对齐）。
-14. **图表编号以源文件为唯一权威**: 排版阶段必须保留 `review_compose.py` 派生的表号，
+16. **PICOS 随证据底座传递**: `--picos-file` 的内容会写入 `review_evidence.json` 的
+    `meta.picos`，deck 的 M13 页直接读它。**不要**另建一份给 deck 用的 PICOS 副本，
+    两份必然漂移。
+17. **图表编号以源文件为唯一权威**: 排版阶段必须保留 `review_compose.py` 派生的表号，
     渲染器不得按出现顺序重新编号，否则会与附录 A 核对表脱节（`review_check.py` R20 会拦截）。
-15. **`.pptx` 写入后必须回读校验页序**: `slidep upsert-dsl` 可能静默失败导致页序错乱，
+18. **`.pptx` 写入后必须回读校验页序**: `slidep upsert-dsl` 可能静默失败导致页序错乱，
     验收以 `.pptx` XML 解析结果为准；`slidep screenshot` 在 Windows 下不可用。
-16. **不要用剪辑式折衷掩盖失败**: 若某阶段确认无法完成（如排版脚本缺失），
+19. **不要用剪辑式折衷掩盖失败**: 若某阶段确认无法完成（如排版脚本缺失），
     明确告知用户并给出可复现的命令，而不是交付一个看起来完整但内容错位的产物。
 
 ## 常见问题
@@ -675,6 +734,8 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
 | 下载全文 | PubMed 仅提供元数据；通过 DOI 链接跳转出版商 |
 | deck 打不开/白屏 | 单文件需在浏览器直接打开并允许本地脚本；不要放进沙箱 iframe |
 | deck 某页内容溢出 | M06 条形 >10 条、M08 分桶 >8 条时先减项，或拆成两页 |
+| **PPT 里没有综述内容** | 顺序错了：`deck_outline.md` 是 PPT 的唯一素材，须先跑 Phase 5 再做 deck；确认 `deck_content.py` 带了 `--review`，outline 顶部应显示「综述层：已包含」 |
+| **deck 的 PICOS 页人群与本主题无关** | 证据底座未携带 PICOS（M13 退回占位符或旧字面量）。给 `review_evidence.py` 补 `--picos-file` 重跑证据底座，再重建 deck；`deck_validate.py` 的 F15 会提示 |
 | 要导出 PDF | 浏览器打开 deck → Ctrl+P → 边距「无」→ 每页一张（16:9 已设 `@page`） |
 | 想让 deck 换主题色 | 改 `references/deck-theme.md` 与模板 `:root` 两处，再跑 `deck_validate.py` |
 | 校验报 P0 调色板外颜色 | 把该 hex 换成 `deck-theme.md` 第 2 节的 token；确需新色则先登记进白名单 |
@@ -685,11 +746,12 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
 | 聚类关键词虚高 | 检查子串陷阱，短词加 `\b`（如 `spect`→`\bspect\b`） |
 | `[review_evidence] 已中止：…非肝脏主题`（exit 2） | 正常保护。按生成的 `criteria_template.json` 填写后加 `--criteria-file` 重跑 |
 | `[review_compose] 已中止：…肝细胞癌 PICOS`（exit 2） | 同上，改填 `picos_template.json` 后加 `--picos-file` |
-| 综述里出现与主题无关的疾病名/受体名 | 内置肝细胞癌 PICOS 泄漏。补 `--picos-file`，并重跑 6.2 |
+| 综述里出现与主题无关的疾病名/受体名 | 内置肝细胞癌 PICOS 泄漏。补 `--picos-file`，并重跑 5.2 |
 | 「潜在纳入」数量异常少（< 检索量一半） | 判据未按主题定制，被静默误排除；先查 `criteria.json` |
 | R14 表编号不连续 / 表号引用悬空 | 结果表缺 `**表 N　标题**` 表题；检查 compose 是否漏发 caption |
 | R20 PRISMA 核对表指向不符 | 核对表定位映射与正文表号脱节；表号须统一由 `T_*` 常量派生 |
 | 排版后表格编号与附录引用对不上 | 渲染器按位置重排了表号；改为向前取表题、保留原编号 |
+| F14 综述层不完整 | HTML 里综述页被删或未被渲染；重跑 `deck_content.py --review` 后重建 deck |
 | `slidep` 报 `presentation is not open` | 写入静默失败；回读 `.pptx` XML 校验页序并重建尾部 |
 | `.pptx` 某页元素溢出 | 条形宽超父容器 / 行 padding 过大；减宽度、收 padding、降 lineHeight |
 | `slidep screenshot` 报 filename 错误 | Windows 已知问题；改用解析 `.pptx` XML 验收 |

@@ -8,7 +8,7 @@ Usage:
                          --max-results 50 \
                          --output pubmed_results.csv
 
-    # with the Phase 5 academic deck chain:
+    # with the Phase 6 academic deck chain:
     python pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
                          -o output/pubmed_results.csv \
                          --deck --deck-topic "radiomics in HCC prognosis"
@@ -83,8 +83,14 @@ def summarize_results(results, query, start_date, end_date):
         print(f"  {i:<4} {pmid:<10} {year:<6} {journal:<25} {title}")
 
 
-def build_deck_outputs(args, query, end_date):
-    """Phase 5: chain the deck content model + HTML deck renderer after retrieval."""
+def build_deck_outputs(args, query, end_date, review_path=None):
+    """Phase 6: chain the deck content model + HTML deck renderer.
+
+    Runs **after** the review. The review layer is embedded into the content
+    model (not just handed to the HTML renderer) because ``deck_outline.md`` is
+    the only material the PPT step receives -- a review layer that lives solely
+    in a render-time argument never reaches the slides.
+    """
     import types
     import re
 
@@ -109,32 +115,31 @@ def build_deck_outputs(args, query, end_date):
         max_results=args.max_results,
         max_articles=8,
         topics_file=args.topics_file,
+        review=review_path,
         search_date=datetime.now().strftime("%Y-%m-%d"),
     )
 
-    print("\n=== Building academic deck (Phase 5) ===")
+    print("\n=== Building academic deck (Phase 6) ===")
+    if not review_path:
+        print("   [deck] WARNING: no review layer. The deck will carry descriptive "
+              "statistics only; run the review first and pass --review.")
     content = dc.build_content(ns)
     json_path, md_path = dc.write_outputs(content, out_dir)
-    print(f"   content model: {json_path}")
-    print(f"   outline:       {md_path}")
+    print(f"   content model: {json_path}  (review layer: "
+          f"{', '.join(content['meta']['review_layers']) or 'none'})")
+    print(f"   outline:       {md_path}  ({len(dc.page_sequence(content))} pages)")
 
     slug = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (args.deck_topic or "deck")).strip("_")[:48] or "deck"
     deck_path = os.path.join(out_dir, f"{slug}_deck.html")
 
     review = None
-    review_path = None
-    if args.review:
-        review_path = build_review_outputs(args, query, end_date)
-        if review_path:
-            with open(review_path, "r", encoding="utf-8") as fh:
-                review = json.load(fh)
+    if review_path:
+        with open(review_path, "r", encoding="utf-8") as fh:
+            review = json.load(fh)
 
     pages = db.write_deck(content, deck_path, review=review)
-    print(f"   html deck:     {deck_path}  ({pages} pages")
-    if review:
-        print("                    + systematic-review pages)")
-    else:
-        print(")")
+    print(f"   html deck:     {deck_path}  ({pages} pages"
+          + (", review pages included)" if review else ", descriptive layer only)"))
     print("   next: run deck_validate.py, then hand deck_outline.md to the PPT step.")
 
 
@@ -179,7 +184,13 @@ def preflight_review(args, query, end_date):
 
 
 def build_review_outputs(args, query, end_date):
-    """Phase 6: build the systematic-review evidence base from the retrieved CSV."""
+    """Phase 5: build the systematic-review evidence base from the retrieved CSV.
+
+    Runs **before** the deck. The deck renders its review layer out of this
+    artifact, so producing the deck first would mean rendering an outline with
+    no review in it -- which is exactly how the PPT ended up without the review's
+    content.
+    """
     import types
 
     try:
@@ -191,9 +202,17 @@ def build_review_outputs(args, query, end_date):
     out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
     os.makedirs(out_dir, exist_ok=True)
 
-    # Criteria were already loaded and validated by preflight_review() before
-    # retrieval started; re-implementing the check here would be a second,
-    # silently-drifting copy of the rule.
+    # Loading is idempotent; *checking* stays in preflight_review() so the rule
+    # has one home. Reloading here keeps this function correct even when it is
+    # called on its own (the criteria are module-level state, and silently
+    # falling back to the hepatocarcinoma defaults is exactly the failure this
+    # whole guard exists to prevent -- it would collapse the corpus to a handful
+    # of records without an error).
+    re.load_criteria(getattr(args, "criteria_file", None))
+
+    # Criteria were already validated by preflight_review() before retrieval
+    # started; re-implementing the check here would be a second, silently
+    # drifting copy of the rule.
     ns = types.SimpleNamespace(
         csv=args.output,
         out_dir=out_dir,
@@ -213,10 +232,18 @@ def build_review_outputs(args, query, end_date):
         search_date=datetime.now().strftime("%Y-%m-%d"),
     )
 
-    print("\n=== Building systematic-review evidence base (Phase 6) ===")
+    print("\n=== Building systematic-review evidence base (Phase 5) ===")
     ev = re.build(ns)
     ev.setdefault("meta", {})["criteria_source"] = re.CRITERIA_SOURCE
     ev["meta"]["criteria_is_default"] = re.CRITERIA_IS_DEFAULT
+    # Carry the PICOS wording with the evidence base so the deck's pictos page
+    # renders the same population the review screened with, instead of a second
+    # copy that can drift (or be wrong for the topic).
+    picos = getattr(args, "_picos", None)
+    if picos:
+        ev["meta"]["picos"] = picos
+        ev["meta"]["picos_source"] = os.path.basename(args.picos_file or "")
+    ev["meta"]["picos_available"] = bool(picos)
     json_path = os.path.join(out_dir, "review_evidence.json")
     md_path = os.path.join(out_dir, "review_corpus.md")
     with open(json_path, "w", encoding="utf-8") as fh:
@@ -232,7 +259,7 @@ def build_review_outputs(args, query, end_date):
     print(f"   evidence json: {json_path}")
     print(f"   corpus digest: {md_path}")
 
-    # Phase 6.2 -- compose the submission-ready skeleton. Everything
+    # Phase 5.2 -- compose the submission-ready skeleton. Everything
     # deterministic is written by the script; only interpretive prose is left
     # behind as WRITE-BLOCK briefs.
     try:
@@ -241,7 +268,7 @@ def build_review_outputs(args, query, end_date):
         print(f"   [review] skeleton skipped: cannot import review_compose ({exc})")
         return json_path
 
-    print("\n=== Composing review skeleton (Phase 6.2) ===")
+    print("\n=== Composing review skeleton (Phase 5.2) ===")
     picos = getattr(args, "_picos", None)
     topic = args.deck_topic or ev["meta"]["topic"]
     pmids = [r["pmid"] for r in ev["corpus"]]
@@ -305,7 +332,8 @@ def main():
     )
     parser.add_argument(
         "--deck", action="store_true",
-        help="After retrieval, also build the Phase 5 deck content model + HTML deck"
+        help="After retrieval, also build the deck content model + HTML deck "
+             "(Phase 6; always runs after --review so the deck carries the review layer)"
     )
     parser.add_argument(
         "--deck-topic", default="",
@@ -321,7 +349,8 @@ def main():
     )
     parser.add_argument(
         "--review", action="store_true",
-        help="After the deck, also build the Phase 6 systematic-review evidence base"
+        help="After retrieval, build the systematic-review evidence base + skeleton "
+             "(Phase 5; runs before the deck)"
     )
     parser.add_argument(
         "--review-out-dir", default=None,
@@ -364,8 +393,8 @@ def main():
     )
     parser.add_argument(
         "--full", action="store_true",
-        help="One-shot pipeline: retrieval -> HTML deck -> systematic-review "
-             "evidence base -> submission-ready review skeleton"
+        help="One-shot pipeline: retrieval -> systematic-review evidence base "
+             "-> submission-ready review skeleton -> deck (with the review layer)"
     )
 
     args = parser.parse_args()
@@ -418,9 +447,17 @@ def main():
     # Step 4: Print summary
     summarize_results(results, query, args.start_date, end_date)
 
-    # Step 5 (optional): build the academic deck
+    # Step 5 (optional): the systematic review FIRST, then the deck built out of
+    # it. Order matters: the deck's review layer is rendered from the review's
+    # evidence base, and deck_outline.md -- the material the PPT step consumes --
+    # is written during the deck stage. Generating the deck first would produce
+    # slides that cannot contain the review.
+    review_path = None
+    if args.review:
+        review_path = build_review_outputs(args, query, end_date)
+
     if args.deck:
-        build_deck_outputs(args, query, end_date)
+        build_deck_outputs(args, query, end_date, review_path)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@
 - **结构化输出**：CSV 包含 PMID、标题、作者、期刊、日期、DOI、摘要
 - **统计汇总**：终端直接输出期刊分布、年份分布和文献列表
 - **期刊发表级系统综述**：从检索结果自动编制 PRISMA 2020 系统综述——证据底座（筛选计数、证据分级、定量信号、收敛汇总、研究空白）→ 综述骨架（确定性章节与全部表格由脚本产出，叙述部分留带必引文献清单的写作块）→ Vancouver 参考文献自动编号 → 期刊门槛质检器把关。**纳入标准与 PICOS 按主题定制**，非目标主题误用内置判据会被守卫拦截而非静默误排除
-- **学术汇报 deck**：可把检索结果渲染成医学深蓝瑞士风 PPT（单文件 HTML + 可编辑 .pptx），内置版式校验器；接入综述后自动追加 M13–M18 综述页
+- **学术汇报 deck（消费综述）**：把**系统综述**渲染成医学深蓝瑞士风 PPT（单文件 HTML + 可编辑 .pptx），内置版式校验器。**执行顺序固定为「先综述、后 deck」**：M13–M20 综述页全部由 `review_evidence.json` 派生并写入 `deck_outline.md`，保证 PPT 素材与综述同源；校验器的 F14/F15 会拦截综述层残缺或 PICOS 退回占位的情形
 
 ## 安装
 
@@ -191,36 +191,7 @@ Search (edat) found 6699 results, retrieving top 10...
 | Doi | DOI 链接 |
 | Abstract | 完整摘要 |
 
-## 学术汇报 deck（Phase 5）
-
-检索完成后可以把结果直接渲染成一份**学术汇报 PPT**：
-
-- **单文件 HTML deck**：无外部依赖，浏览器直接打开，`← / →` 翻页、`G` 页格索引、`Ctrl+P` 导出 PDF。
-- **可编辑 .pptx**：以 `deck_outline.md` 为素材，交由平台 PPT 能力生成。
-
-视觉方向固定为「医学专业 + 科研科技」：瑞士国际主义网格、直角色块、1px 发丝线、
-无阴影无渐变，主色医学深蓝 `#0A3D7C`。版式为 M01–M20，接入综述后自动追加 M13–M18 综述页，
-配色/字号/网格规范见 `references/deck-theme.md`，版式契约见 `references/deck-layouts.md`。
-
-一键串联（检索 + 内容模型 + HTML deck）：
-
-```bash
-python scripts/pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
-    -o output/pubmed_results.csv \
-    --deck --deck-topic "影像组学在肝细胞癌预后预测中的应用"
-```
-
-分步执行：
-
-```bash
-python scripts/deck_content.py --csv output/pubmed_results.csv --out-dir output \
-    --topic "影像组学在肝细胞癌预后预测中的应用" --query-file query.txt \
-    --start 2021/01/01 --end 2026/10/02
-python scripts/deck_build.py    --content output/deck_content.json --out output/deck.html
-python scripts/deck_validate.py output/deck.html          # P0 必须为 0
-```
-
-## 系统综述（Phase 6）
+## 系统综述（Phase 5，先于 deck）
 
 在检索结果之上编制 PRISMA 2020 系统综述。**纳入标准必须按本次主题定制**——
 脚本内置的默认判据是肝细胞癌专用的，用在其他主题上不会报错，
@@ -230,10 +201,11 @@ python scripts/deck_validate.py output/deck.html          # P0 必须为 0
 并写出可编辑的模板。字段定义、写法规范与完整示例见 **`references/review-criteria.md`**。
 
 ```bash
-# 1) 证据底座（PRISMA 计数、证据分级、定量信号、收敛汇总、研究空白）
+# 1) 证据底座（PRISMA 计数、证据分级、定量信号、收敛汇总、研究空白、meta.picos）
 python scripts/review_evidence.py --csv output/pubmed_results.csv --out-dir output \
     --topic "<检索主题>" --query-file query.txt \
-    --criteria-file output/criteria.json --themes-file output/themes.json \
+    --criteria-file output/criteria.json --picos-file output/picos.json \
+    --themes-file output/themes.json \
     --start 2021/01/01 --end 2026/10/02
 
 # 2) 综述骨架（确定性章节与全部表格由脚本产出，叙述留写作块）
@@ -249,6 +221,50 @@ python scripts/review_check.py output/review_draft.md \
 质检器覆盖：章节与 31 个小节完整性、引用编号越界、连续 300 字无引用、
 正文数字与证据底座一致性、绝对化表述、**表号连续性与交叉引用语义**（R14/R20）、
 残留占位符、正文字数下限。
+
+`--picos-file` 的内容会写入 `review_evidence.json` 的 `meta.picos`，
+下一阶段的 deck 直接读它渲染 PICOS 页——不必也不应再维护第二份副本。
+
+## 学术汇报 deck（Phase 6，消费系统综述）
+
+**顺序契约：先系统综述，后 deck。** deck 的综述层（M13–M20）全部派生自
+`review_evidence.json`，而交给 PPT 环节的唯一素材 `deck_outline.md` 在 deck 阶段写出。
+先出 deck 再补综述，PPT 素材里必然缺整层综述，PICOS 页还会退回渲染器里写死的人群描述
+（实测：一篇影像组学 deck 的 PICOS 页显示「肝细胞癌患者」）。
+
+- **单文件 HTML deck**：无外部依赖，浏览器直接打开，`← / →` 翻页、`G` 页格索引、`Ctrl+P` 导出 PDF。
+- **可编辑 .pptx**：以 `deck_outline.md`（已含综述层）为素材，交由平台 PPT 能力生成。
+
+视觉方向固定为「医学专业 + 科研科技」：瑞士国际主义网格、直角色块、1px 发丝线、
+无阴影无渐变，主色医学深蓝 `#0A3D7C`。版式为 M01–M20，其中 M13–M20 是综述层页面，
+按叙事位置插入描述层；配色/字号/网格规范见 `references/deck-theme.md`，
+版式契约见 `references/deck-layouts.md`。
+
+一键串联（检索 → 综述 → deck）：
+
+```bash
+python scripts/pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
+    -o output/pubmed_results.csv \
+    --criteria-file output/criteria.json --picos-file output/picos.json \
+    --review-themes-file output/themes.json \
+    --full --deck-topic "影像组学文献调研"
+```
+
+分步执行：
+
+```bash
+python scripts/deck_content.py --csv output/pubmed_results.csv --out-dir output \
+    --topic "影像组学文献调研" --query-file query.txt \
+    --review output/review_evidence.json \
+    --start 2021/01/01 --end 2026/10/02
+python scripts/deck_build.py    --content output/deck_content.json --out output/deck.html
+python scripts/deck_validate.py output/deck.html --strict   # P0 必须为 0
+```
+
+`--review` 把证据底座写入 `deck_content.json` 的 `review` 块，
+`deck_outline.md` 因此带有 8 页标注「【综述层】」的大纲；不传时 outline 会显式
+标注「综述层：缺失」。校验器的 **F14**（综述层残缺）与 **F15**（PICOS 为占位）
+专门拦截「deck 与综述脱节」这类问题。
 
 ## PubMed 检索语法参考
 

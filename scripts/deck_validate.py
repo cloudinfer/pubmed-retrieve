@@ -1,5 +1,5 @@
 """
-Phase 5 layout validator for pubmed-retrieve decks.
+Phase 6 layout validator for pubmed-retrieve decks.
 
 Enforces the hard rules in references/deck-theme.md (section 10) and the
 structural contracts in references/deck-layouts.md.
@@ -49,6 +49,16 @@ STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.DOTALL)
 MIN_FONT_PX = 13.0
 BAD_WEIGHTS = {"600", "700", "800", "900"}
 ALERT_HEX = "B01E28"
+
+# The review layer is all-or-nothing: a deck that shows a research question but
+# no PROBAST-aware level distribution reads as if the question were answered.
+# M13/M14/M18 are the three pages deck_build emits unconditionally whenever a
+# review layer is present, so they are the ones worth requiring.
+REVIEW_CORE_LAYOUTS = ("M13", "M14", "M18")
+# Must match deck_build.PICOS_MISSING: the marker the renderer writes when the
+# review's PICOS never arrived, which silently reverted the PICOS page to a
+# hardcoded (and topic-wrong) population in an earlier version.
+PICOS_PLACEHOLDER = "（未提供）"
 
 
 def normalize_hex(raw: str) -> str:
@@ -156,6 +166,20 @@ def check_structure(doc: str, rep: Report) -> int:
             if cards > 4:
                 rep.add("p1", f"F11 文献卡片 {cards} 张，单页上限 4 张（{where}）")
 
+    layouts = []
+    for block in slides:
+        m = re.search(r'data-layout="([^"]*)"', block)
+        layouts.append(m.group(1) if m else "")
+    present = set(layouts)
+    reviewed = present & set(REVIEW_CORE_LAYOUTS)
+    if reviewed:
+        missing = [x for x in REVIEW_CORE_LAYOUTS if x not in present]
+        if missing:
+            rep.add("p1", "F14 综述层不完整：仅有 "
+                          + "、".join(sorted(reviewed)) + "，缺 " + "、".join(missing)
+                          + "；综述页必须成套出现（先完成系统综述，"
+                            "再带 --review 重跑 deck_content.py）")
+
     return len(slides)
 
 
@@ -175,6 +199,11 @@ def check_pages_layout_specific(slides: list[str], rep: Report) -> None:
         if layout == "M07":
             if not has_class(block, "chart"):
                 rep.add("p0", f"M07 缺少内联 SVG 趋势图（{where}）")
+        if layout == "M13":
+            if PICOS_PLACEHOLDER in re.sub(r"<[^>]+>", "", block):
+                rep.add("p1", "F15 M13 的 PICOS 为占位内容：纳入标准未随证据底座提供，"
+                              "该页没有主题专属的人群描述；带 --picos-file 重跑证据底座后"
+                              f"再生成 deck（{where}）")
         for svg in re.findall(r"<svg\b[^>]*>", block):
             if 'role="img"' not in svg:
                 rep.add("p1", f"无障碍：内联 SVG 缺少 role=\"img\"（{where}）")

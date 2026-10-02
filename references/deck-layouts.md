@@ -1,9 +1,14 @@
 # 学术汇报 deck 锁定版式目录 · M01–M20
 
-正文页只能从下表的 12 个具名版式中选择，**不得临时发明页面结构**。
+正文页只能从下表具名版式中选择，**不得临时发明页面结构**。
 新增版式必须同时改三处：`references/deck-layouts.md`、`assets/deck/template-medical.html`、`scripts/deck_validate.py`。
 
 设计规范（色板、字号、网格、禁止清单）见 `references/deck-theme.md`。
+
+> **前置条件**：deck 是流水线的最后一环。先完成系统综述（Phase 5），
+> 再由综述产出 deck（Phase 6）。综述层 M13–M20 全部读 `review_evidence.json`，
+> 而交给 PPT 环节的 `deck_outline.md` 在 deck 阶段写出——
+> 顺序颠倒会让 PPT 素材缺整层综述。
 
 ---
 
@@ -16,20 +21,22 @@
 {
   "schema": "pubmed-deck/1",
   "meta": {
-    "topic":        "radiomics 在肝细胞癌预后预测中的应用",   // 检索主题摘要，≤ 30 字
+    "topic":        "影像组学文献调研",                        // 检索主题摘要，≤ 30 字
     "query":        "(...)[Title/Abstract] AND ...",          // 完整检索式
     "start_date":   "2021/01/01",
     "end_date":     "2026/10/02",                             // 空则记为「不限」
     "search_date":  "2026-10-02",
     "date_field":   "EDAT（PubMed 入库日期）",
     "max_results":  2000,                                     // 0 表示不限
-    "hit_count":    1284,
+    "hit_count":    395,
+    "review_source": "review_evidence.json",                  // 无综述层时为 null
+    "review_layers": ["prisma", "levels", "matrix", "numbers", "gaps"],
     "generated_at": "2026-10-02T16:20:00"
   },
-  "kpis":    [ { "label": "命中文献", "value": "1284", "unit": "篇", "note": "EDAT 口径" } ],   // 固定 4 条
-  "journals":[ { "name": "Front Oncol", "count": 57, "share": 4.4 } ],                        // Top 10
-  "years":   [ { "year": 2021, "count": 150 } ],                                              // 升序
-  "topics":  [ { "key": "深度学习", "count": 420, "share": 32.7, "pattern": "...",
+  "kpis":    [ { "label": "命中文献", "value": "395", "unit": "篇", "note": "EDAT 口径" } ],   // 固定 4 条
+  "journals":[ { "name": "Front Oncol", "count": 57, "share": 4.4 } ],                       // Top 10
+  "years":   [ { "year": 2026, "count": 395 } ],                                             // 升序
+  "topics":  [ { "key": "深度学习", "count": 100, "share": 25.3, "pattern": "...",
                  "scope": "specific",                  // specific | core（share ≥ 80% 判 core）
                  "review_count": 38, "share_review": 9.0, "validation_count": 21,
                  "latest_year": 2026, "top_journal": "Front Oncol",
@@ -40,11 +47,32 @@
     "date_field":  "命中按 EDAT 统计，与期刊正式出版月不完全一致。",
     "bucketing":   "主题分桶可多重归类，各桶占比之和大于 100%。",
     "source":      "数据来源：PubMed（NCBI E-utilities），检索日期 2026-10-02。"
+  },
+  // 以下块仅在 deck_content.py 带 --review 时出现，是 M13–M20 的唯一数据源。
+  // 由 review_evidence.json 精简而来：只保留渲染器读到的字段，
+  // 因此 deck_content.json 仍是「HTML deck 与 PPT 大纲共用的一份数据」。
+  "review": {
+    "meta":    { "picos": { "population": "...", "index": "...", "comparator": "...",
+                            "outcome": "...", "study_type": "..." },
+                 "picos_source": "picos_radiomics.json", "picos_available": true,
+                 "criteria_source": "criteria_radiomics.json" },
+    "prisma":  { "identified": 395, "eligible_pending_fulltext": 313, "included_confirmed": 0,
+                 "excluded_at_screening": [ { "reason": "...", "count": 43 } ] },
+    "levels":  [ { "level": "IV", "label": "队列 / 病例对照研究", "count": 224 } ],
+    "numbers": { "auc_overall": { "n": 182, "median": 0.838, "p25": 0.771, "p75": 0.886 } },
+    "gaps":    [ { "type": "方法学", "gap": "...", "evidence": "...",
+                   "implication": "...", "priority": "中" } ],
+    "matrix":  { "convergence": [ { "theme": "...", "support": 208, "net": 180,
+                                    "high_level_rate": 9.6, "external_validation_rate": 60.1,
+                                    "strength": "争议", "confidence": "中" } ] }
   }
 }
 ```
 
 **所有 `notes` 必须在报告中出现**，这是科研汇报的底线要求。
+
+> `review` 块缺失时，M13–M20 全部不渲染、`deck_outline.md` 顶部标注
+> 「综述层：**缺失**」。这是合法但需在答复中说明的降级状态。
 
 ---
 
@@ -64,26 +92,39 @@
 | M10 | Duo Compare | 白 | 左右对照 | `topics` / `articles` |
 | M11 | Outlook | 白 | 三段式 | `notes` |
 | M12 | Closing | 深蓝 | 结论 + 落款 | `meta` |
-| M13 | PICOS | 白 | 研究问题与 PICOS | `review_evidence.meta` |
+| M13 | PICOS | 白 | 研究问题与 PICOS | `review_evidence.meta.picos` |
 | M14 | PRISMA Flow | 白 | 筛选流程漏斗 | `review_evidence.prisma` |
 | M15 | Evidence Levels | 白 | 证据等级分布 | `review_evidence.levels` |
 | M16 | Convergence | 白 | 证据收敛汇总 | `review_evidence.matrix.convergence` |
 | M17 | Gaps & Agenda | 白 | 研究空白与议程 | `review_evidence.gaps` |
 | M19 | Review Quant | 白 | 定量性能汇总 | `review_evidence.numbers` |
-| M20 | Review Findings | 白 | 综述核心发现 | `review_evidence.convergence` |
-| M18 | Review Closing | 深蓝 | 综述结论 | `review_evidence` |
+| M20 | Review Findings | 白 | 综述核心发现 | `review_evidence`（现算，非字面量） |
+| M18 | Review Closing | 深蓝 | 综述结论 | `review_evidence`（现算，非字面量） |
 
-默认页序（无 review 时 8–11 页，启用 `--review` 时 16–20 页）：
+> **综述层（M13–M20）必须由 `review_evidence.json` 派生，不得在渲染器里写死。**
+> 这些页面曾是一批字符串字面量，换主题后仍输出旧主题的人群与终点
+> （真实案例：影像组学 deck 的 PICOS 页显示「肝细胞癌患者」，
+> 核心发现里出现「MVI 预测」「TACE 应答预测」）。
+> M13 的人群描述取自 `meta.picos`——该字段由 `review_evidence.py --picos-file` 写入，
+> 因此**先生成系统综述、再生成 deck** 是硬性前置条件。
+
+页序（综述层按叙事位置**插入**描述层，不追加在末尾）：
 
 ```
-无 review:
+无 review（纯描述性，8–11 页）:
 M01 → M03 → M04 → M05 → M06 → M07 → M08 → M09 → M10 → M11 → M12
         └────────────────── 白底区，hero 页仅首尾 ──────────────────┘
 
-启用 --review:
+启用 review（16–20 页，本例 19 页）:
 M01 → M03 → M04 → M13 → M14 → M05 → M15 → M06 → M07 → M08
-       → M09 → M10 → M16 → M17 → M11 → M18 → M12
+       → M09 → M10 → M16 → M17 → M19 → M20 → M11 → M18 → M12
 ```
+
+条件渲染：`M07` 仅当 `years` ≥ 2 条时出现；`M09` 每 4 篇文献一页，可重复；
+`M15` 需 `levels` 非空；`M16 / M20` 需 `matrix.convergence` 非空；
+`M17` 需 `gaps` 非空；`M19` 需 `numbers.auc_overall` 存在。
+因此实际页数以 `deck_content.py` 打印的 `outline pages` 为准，
+`deck_outline.md` 由渲染器的页序列反推生成，二者不会脱节。
 
 **裁剪规则**：页数紧张时，按 `M10 → M02 → M03` 的顺序删。
 `M01 / M04 / M05 / M06 / M12` 为核心页，**不可删**。
