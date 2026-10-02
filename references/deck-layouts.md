@@ -69,9 +69,11 @@
 | M15 | Evidence Levels | 白 | 证据等级分布 | `review_evidence.levels` |
 | M16 | Convergence | 白 | 证据收敛汇总 | `review_evidence.matrix.convergence` |
 | M17 | Gaps & Agenda | 白 | 研究空白与议程 | `review_evidence.gaps` |
+| M19 | Review Quant | 白 | 定量性能汇总 | `review_evidence.numbers` |
+| M20 | Review Findings | 白 | 综述核心发现 | `review_evidence.convergence` |
 | M18 | Review Closing | 深蓝 | 综述结论 | `review_evidence` |
 
-默认页序（无 review 时 8–11 页，启用 `--review` 时 14–18 页）：
+默认页序（无 review 时 8–11 页，启用 `--review` 时 16–20 页）：
 
 ```
 无 review:

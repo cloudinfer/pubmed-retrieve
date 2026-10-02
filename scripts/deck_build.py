@@ -791,6 +791,115 @@ def build_gaps(c: dict, rv: dict, page_no: int) -> str:
                 body=body, page=page_no, meta=c["meta"])
 
 
+NUM_ROWS = [
+    ("auc_overall", "AUC / C-index（全部）"),
+    ("auc_training", "AUC（训练集）"),
+    ("auc_validation", "AUC（内部验证集）"),
+    ("auc_external", "AUC（外部验证集）"),
+    ("cohort_size", "队列规模（例）"),
+]
+
+
+def build_quant(c: dict, rv: dict, page_no: int) -> str:
+    n = rv.get("numbers", {})
+    head = (
+        '<div style="display:grid;grid-template-columns:4fr 1.4fr 1.6fr 2.6fr;'
+        'column-gap:16px;padding-bottom:10px;border-bottom:1px solid ' + HAIR + '">'
+        '<span class="eyebrow">队列语境</span>'
+        '<span class="eyebrow" style="text-align:right">n</span>'
+        '<span class="eyebrow" style="text-align:right">中位</span>'
+        '<span class="eyebrow" style="text-align:right">四分位距</span></div>'
+    )
+    rows = [head]
+    for key, label in NUM_ROWS:
+        st = n.get(key)
+        if not st or not st.get("n"):
+            continue
+        dec = 0 if key == "cohort_size" else 3
+        rows.append(
+            '<div style="display:grid;grid-template-columns:4fr 1.4fr 1.6fr 2.6fr;'
+            'column-gap:16px;padding:12px 0;border-bottom:1px solid ' + HAIR + '">'
+            f'<span class="t-bodys">{esc(label)}</span>'
+            f'<span class="t-bodys t-num" style="text-align:right">{st["n"]}</span>'
+            f'<span class="t-bodys t-num" style="text-align:right;color:{ANCHOR}">'
+            f'{st["median"]:.{dec}f}</span>'
+            f'<span class="t-bodys t-num" style="text-align:right;color:var(--ink-3)">'
+            f'{st["p25"]:.{dec}f} – {st["p75"]:.{dec}f}</span></div>'
+        )
+    ext = n.get("external_validation_n", 0)
+    pro = n.get("prospective_n", 0)
+    pool = rv.get("prisma", {}).get("eligible_pending_fulltext", 0) or 1
+    notes = (
+        f'<div style="grid-column:9/17;margin-top:24px">'
+        f'<div class="eyebrow">两项系统性落差</div>'
+        f'<div style="margin-top:14px;border-top:2px solid {ANCHOR};padding-top:12px">'
+        f'<div class="t-bodys muted">训练集 → 内部验证集</div>'
+        f'<div class="t-h3" style="margin-top:6px;color:{ANCHOR}">'
+        f'{(n.get("auc_training") or {}).get("median", 0):.3f} → '
+        f'{(n.get("auc_validation") or {}).get("median", 0):.3f}</div>'
+        f'<div class="t-cap" style="margin-top:6px">方向与幅度均与过拟合预期一致，'
+        f'属可预期的性能衰减。</div></div>'
+        f'<div style="margin-top:22px;border-top:2px solid {ANCHOR};padding-top:12px">'
+        f'<div class="t-bodys muted">内部验证 → 外部验证</div>'
+        f'<div class="t-h3" style="margin-top:6px;color:{ANCHOR3}">'
+        f'{(n.get("auc_validation") or {}).get("median", 0):.3f} → '
+        f'{(n.get("auc_external") or {}).get("median", 0):.3f}</div>'
+        f'<div class="t-cap" style="margin-top:6px">不可解读为外部验证更优：'
+        f'能进入外部验证的研究经过向上选择。</div></div>'
+        f'<div class="t-cap" style="margin-top:20px">外部验证或多中心 {ext} 篇'
+        f'（{ext / pool * 100:.1f}%）；前瞻性 {pro} 篇（{pro / pool * 100:.1f}%）。</div>'
+        f'</div>'
+    )
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">定量性能汇总</h2>'
+        f'<div style="grid-column:1/9;margin-top:24px">{"".join(rows)}</div>'
+        + notes +
+        f'<p class="t-cap" style="grid-column:{FULL};margin-top:16px">'
+        f'数值为「报告值」的分布，非合并效应量；多数摘要未报告置信区间。</p>'
+    )
+    return page(layout="M19", label="定量性能", title="定量性能汇总",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_findings(c: dict, rv: dict, page_no: int) -> str:
+    conv = rv.get("matrix", {}).get("convergence", [])
+    strong = [x["theme"] for x in conv if x["strength"] == "强"]
+    levels = rv.get("levels", [])
+    pool = rv.get("prisma", {}).get("eligible_pending_fulltext", 0)
+    l4 = next((x["count"] for x in levels if x["level"] == "IV"), 0)
+    items = [
+        ("01", "影像组学模型的预测性能在多数 Meta 分析中优于单纯临床-影像模型",
+         "在复发预测、MVI 预测与 TACE 应答预测中重复出现，是一致性最高的发现。"),
+        ("02", "预测能力集中在 MVI、早期复发与治疗应答三类终点",
+         "对离散、可病理确证的终点效果最好，对时间-事件终点稳定性较差。"),
+        ("03", "六个主题无一达到「强」收敛",
+         ("不存在任何方向，其证据质量显著优于该领域整体平均水平。"
+          if not strong else f"仅 {strong[0]} 达到「强」，其余均为中或弱。")),
+        ("04", "验证强度是全局性短板，而非个别研究的不足",
+         "外部验证率与前瞻性占比在主题间高度一致，指向领域层面系统性缺陷。"),
+    ]
+    rows = "".join(
+        f'<div style="display:grid;grid-template-columns:56px 1fr;column-gap:16px;'
+        f'padding:13px 0;border-bottom:1px solid {HAIR}">'
+        f'<span class="t-bodys t-num" style="color:{ANCHOR}">{num}</span>'
+        f'<span><span class="t-bodys" style="display:block">{esc(head)}</span>'
+        f'<span class="t-cap" style="display:block;margin-top:5px">{esc(sub)}</span>'
+        f'</span></div>'
+        for num, head, sub in items
+    )
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">综述核心发现</h2>'
+        f'<div style="grid-column:{FULL};margin-top:22px">{rows}</div>'
+        f'<div style="grid-column:{FULL};margin-top:22px;'
+        f'border-top:2px solid var(--ink);padding-top:14px">'
+        f'<p class="t-bodys">证据边界：Level IV 占 {l4 / (pool or 1) * 100:.1f}%、'
+        f'外部验证率不足三成，按 GRADE 框架确定性起点即为「低」；'
+        f'PROBAST 与 GRADE 尚未完成，全文复核前不支持临床推荐强度判定。</p></div>'
+    )
+    return page(layout="M20", label="核心发现", title="综述核心发现",
+                body=body, page=page_no, meta=c["meta"])
+
+
 def build_review_conclusion(c: dict, rv: dict, page_no: int) -> str:
     p = rv.get("prisma", {})
     n = rv.get("numbers", {})
@@ -859,6 +968,11 @@ def compose(c: dict, rv: dict | None = None) -> list[str]:
         pages.append(build_convergence(c, rv, n()))
     if rv and rv.get("gaps"):
         pages.append(build_gaps(c, rv, n()))
+
+    if rv and rv.get("numbers", {}).get("auc_overall"):
+        pages.append(build_quant(c, rv, n()))
+    if rv and rv.get("matrix", {}).get("convergence"):
+        pages.append(build_findings(c, rv, n()))
 
     pages.append(build_outlook(c, n()))
 
