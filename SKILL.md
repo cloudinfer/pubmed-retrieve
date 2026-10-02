@@ -404,13 +404,17 @@ HTML deck 是视觉稿；需要可编辑文件时，**按平台规范交由 `ten
 
 ---
 
-### Phase 6: 生成系统综述证据图谱（用户要求时执行）
+### Phase 6: 编制期刊发表级系统综述（用户要求综述时执行）
 
-在 Phase 5 的检索结果之上，进一步生成一份**符合 PRISMA 2020 框架的系统综述证据图谱**。
+在检索结果之上，编制一份**可投稿级别**的系统综述，并同步扩展 deck 与 PPT。
+与 Phase 5 的分工：Phase 5 回答「检索到了什么」（描述性统计）；
+Phase 6 回答「这些证据支持什么、缺什么、证据有多可靠」（系统性综合）。
+Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得复用 Phase 5 的描述性主题桶**。
 
-与 Phase 5 不同：Phase 5 回答「检索到了什么」（描述性统计）；Phase 6 回答「这些证据支持什么、缺什么」（系统性综合）。因此 Phase 6 必须拥有自己的分析主题、证据分级与收敛汇总，**不能复用 Phase 5 的描述性主题桶**。
+凡声明「要可发表」「要期刊水平」「要投稿」，一律按 `references/review-standard.md`
+执行；未达门槛不得交付。
 
-#### 6.1 生成 `review_evidence.json`
+#### 6.1 构建证据底座
 
 ```bash
 "$PY" "<SKILL_DIR>/scripts/review_evidence.py" \
@@ -422,39 +426,63 @@ HTML deck 是视觉稿；需要可编辑文件时，**按平台规范交由 `ten
   --search-date "<今天 YYYY-MM-DD>"
 ```
 
-产出：
+产出 `review_evidence.json`（PRISMA 计数、证据等级、定量信号、文献矩阵、收敛汇总、
+研究空白）与 `review_corpus.md`（代表文献摘要集）。
 
-| 文件 | 作用 |
-|------|------|
-| `review_evidence.json` | PRISMA 计数、证据等级、定量信号、文献矩阵、收敛汇总、研究空白 |
-| `review_corpus.md` | 90 篇代表文献摘要集，含信号句与主题归属 |
-
-关键方法学约束（在答复中必须声明）：
+四条方法学约束（答复中必须声明）：
 
 - **证据分级是暂定的**：由摘要中报告的研究设计自动推断，全文复核后应更新。
-- **PRISMA 计数是题录层面的**：「潜在纳入」不等于「已纳入」，真正的纳入需全文复核。
-- **PROBAST / GRADE 表留空**：偏倚风险评估与证据确定性评级必须基于全文，不得推断填充。
-- **收敛指标在全量文献池计算**：不在精选语料上计算，避免抽样偏倚。
+- **PRISMA 计数是题录层面的**：「潜在纳入」不等于「已纳入」。
+- **PROBAST / GRADE 表留空**：必须基于全文评估，**不得用摘要推断填充**。
+- **收敛指标在全量文献池计算**：不在精选语料上算，避免抽样偏倚。
 
-#### 6.2 撰写综述正文
+#### 6.2 生成综述骨架（确定性内容全部由脚本产出）
 
-以 `review_evidence.json` 与 `review_corpus.md` 为素材，按学术综述格式撰写 Markdown 正文，
-结构参考 `academic-paper/templates/literature_review_template.md` 与 deep-research 方法论：
+```bash
+"$PY" "<SKILL_DIR>/scripts/review_compose.py" \
+  --evidence "<workspace>/output/review_evidence.json" \
+  --csv "<workspace>/output/pubmed_results.csv" \
+  --out-dir "<workspace>/output" --topic "<检索主题>" [--regno "CRD4202xxxx"]
+```
 
-- 结构化摘要（目的 / 方法 / 结果 / 结论）+ 关键词
-- 引言（背景 / 立题依据 / 范围与边界 / 结构）
-- 方法（PICOS / 检索策略 / 筛选流程 / 证据分级 / 偏倚风险计划）
-- 结果（PRISMA 流程 / 基本特征 / 证据等级 / 主题综合 / 定量性能 / 收敛汇总）
-- 偏倚风险与证据质量占位表
-- 讨论（趋同 / 分歧 / 方法学观察 / 研究空白与议程 / 局限性）
-- 结论 + AI 使用声明 + 数据可用性
-- 参考文献：由 `pubmed_results.csv` 按 PMID 直接生成，不转录
+脚本自动写入**全部可从 CSV 确定性派生的内容**：中英题名与摘要的数字部分、
+PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布表、
+纳入研究特征表、定量信号表、主题收敛汇总表、PROBAST 与 GRADE 表结构、
+六项声明、Vancouver 参考文献、PRISMA 2020 核对表附录、检索式附录、
+引证样本清单附录、逐条评估表附录。
 
-综述正文生成后，走 `tencent-docx` 排版为 `.docx`。
+只有**叙述性综合**留作 `WRITE-BLOCK`，每个块带明确任务描述、字数区间与**必引 PMID 清单**。
+写作因此是有约束的填空，不是自由发挥。
 
-#### 6.3 扩展 deck 与 PPT
+#### 6.3 撰写叙述部分
 
-HTML deck 和 `.pptx` 应补充 Phase 6 专属页（M13–M18）：
+逐块填写 `review_draft.md` 中的 `WRITE-BLOCK`，填写后整块删除注释。要求：
+
+- 每个块只用该块必引清单内的文献支撑实证论断（背景性表述可引指南或教科书）；
+- 不得引用 corpus 之外的 PMID 来陈述本次检索的发现；
+- 严格遵循 `references/review-standard.md` 的语言禁忌（禁绝对化表述、禁 vibe citing）；
+- PROBAST / GRADE / 待提取字段一律保持「待评估」「待提取」，不得提前填值。
+
+#### 6.4 期刊门槛质检（P0 必须为 0 才能交付）
+
+```bash
+"$PY" "<SKILL_DIR>/scripts/review_check.py" "<workspace>/output/<综述>.md" \
+  --evidence "<workspace>/output/review_evidence.json" \
+  --refmap "<workspace>/output/review_refmap.json" --strict
+```
+
+检查项：章节与 31 个小节完整性、写作块是否清零、引用编号越界、
+连续 300 字无引用、正文数字与证据底座一致性、绝对化表述、
+图表编号连续性、残留占位符、正文字数下限（系统综述 12,000 字）。
+
+#### 6.5 排版为可编辑文档
+
+走 `tencent-docx` 将 Markdown 排版为论文格式 `.docx`（标题层级、中英题名、
+结构化摘要、表格、参考文献悬挂缩进）。
+
+#### 6.6 扩展 deck 与 PPT
+
+HTML deck 追加 M13–M18 综述页：
 
 | 页码 | 版式 | 内容 |
 |------|------|------|
@@ -465,34 +493,34 @@ HTML deck 和 `.pptx` 应补充 Phase 6 专属页（M13–M18）：
 | M17 | Gaps & Agenda | 研究空白与研究议程 |
 | M18 | Review Closing | 综述结论与边界 |
 
-`deck_build.py` 已支持 `--review <review_evidence.json>` 自动追加这 6 页；
-`pubmed_cli.py` 也已支持 `--review` 一键串联。
+```bash
+"$PY" "<SKILL_DIR>/scripts/deck_build.py" \
+  --content "<workspace>/output/deck_content.json" \
+  --review "<workspace>/output/review_evidence.json" \
+  --out "<workspace>/output/<主题>_deck.html"
+"$PY" "<SKILL_DIR>/scripts/deck_validate.py" "<workspace>/output/<主题>_deck.html" --strict
+```
 
-#### 6.4 提交
+`.pptx` 以 `deck_outline.md` + 综述章节为素材，走 PPT 能力产出，补充研究问题、
+PRISMA 流程、证据分级、收敛汇总、空白与展望、结论页。
 
-用 `present_files` 一次性展示：
+#### 6.7 提交
 
-1. 系统综述 `.docx`
-2. 扩展后的 HTML deck
-3. 扩展后的 `.pptx`
-4. `review_evidence.json` 与 `pubmed_results.csv`
+用 `present_files` 一次性展示：系统综述 `.docx`、Markdown 源文件、
+HTML deck、`.pptx`、`review_evidence.json` 与 `pubmed_results.csv`。
 
-在答复中说明：
+答复中须说明：这是**全文复核前**的证据图谱；计数、分级与定量汇总均基于题录与摘要；
+PROBAST 与 GRADE 尚未完成，已以占位表列出；所有引用 PMID 均可回查 CSV。
 
-- 这是**全文复核前**的证据图谱；
-- PRISMA 计数、证据分级、定量汇总均基于题录与摘要；
-- PROBAST 与 GRADE 尚未完成，已以占位表列出；
-- 所有引用 PMID 均可回查 CSV 校验。
-
-> **一键串联**：`pubmed_cli.py` 的 `--review` 参数可在 `--deck` 之后继续生成 Phase 6 证据底座，
-> 并渲染含 M13–M18 的 HTML deck：
+> **一键串联**：
 > ```bash
 > "$PY" "<SKILL_DIR>/scripts/pubmed_cli.py" -f query.txt -s "2021/01/01" -e "2026/10/02" \
 >   -o "<workspace>/output/pubmed_results.csv" \
->   --deck --deck-topic "radiomics 在肝细胞癌预后预测中的应用" \
->   --review
+>   --full --deck-topic "影像组学在肝细胞癌预后预测中的应用"
 > ```
-> 综述正文写作与 `.docx`/`.pptx` 仍由外部文档能力完成。
+> `--full` = 检索 → HTML deck（含 M13–M18）→ 证据底座 → 综述骨架 + 参考文献 + 引用映射，
+> 并打印下一步的质检命令。其后仍需：填写 WRITE-BLOCK（6.3）→ 质检（6.4）→
+> 排版 `.docx`（6.5）→ 产出 `.pptx`（6.6）。
 
 ## 依赖
 
@@ -503,7 +531,8 @@ pip install requests pandas
 WorkBuddy 环境下优先使用托管 venv（见 Phase 0），依赖通常已就绪。
 Phase 5 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **只用标准库 + pandas**,
 不引入新依赖；`.pptx` 由平台 PPT 能力产出，脚本侧不需要 `python-pptx`。
-Phase 6 的 `review_evidence.py` 同样只用标准库 + pandas。
+Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同样只用标准库 + pandas。
+综述排版 `.docx` 走平台文档能力。
 
 ## 注意事项
 

@@ -13,11 +13,10 @@ Usage:
                          -o output/pubmed_results.csv \
                          --deck --deck-topic "radiomics in HCC prognosis"
 
-    # with Phase 5 + Phase 6 systematic review:
+    # one-shot: retrieval + deck + review evidence base + review skeleton
     python pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
                          -o output/pubmed_results.csv \
-                         --deck --deck-topic "radiomics in HCC prognosis" \
-                         --review
+                         --full --deck-topic "影像组学在肝细胞癌预后预测中的应用"
 """
 
 import argparse
@@ -182,6 +181,39 @@ def build_review_outputs(args, query, end_date):
         ) + "\n")
     print(f"   evidence json: {json_path}")
     print(f"   corpus digest: {md_path}")
+
+    # Phase 6.2 -- compose the submission-ready skeleton. Everything
+    # deterministic is written by the script; only interpretive prose is left
+    # behind as WRITE-BLOCK briefs.
+    try:
+        import review_compose as rc
+    except ImportError as exc:
+        print(f"   [review] skeleton skipped: cannot import review_compose ({exc})")
+        return json_path
+
+    print("\n=== Composing review skeleton (Phase 6.2) ===")
+    pmids = [r["pmid"] for r in ev["corpus"]]
+    refs, mapping = rc.build_references(args.output, pmids)
+    draft = rc.compose(ev, refs, mapping, args.deck_topic or ev["meta"]["topic"], "")
+
+    draft_path = os.path.join(out_dir, "review_draft.md")
+    refs_path = os.path.join(out_dir, "review_references.md")
+    map_path = os.path.join(out_dir, "review_refmap.json")
+    with open(draft_path, "w", encoding="utf-8") as fh:
+        fh.write(draft)
+    with open(refs_path, "w", encoding="utf-8") as fh:
+        fh.write("## 参考文献\n\n" + "\n".join(refs) + "\n")
+    with open(map_path, "w", encoding="utf-8") as fh:
+        import json as _json
+        _json.dump(mapping, fh, ensure_ascii=False, indent=2)
+
+    blocks = draft.count("<!-- WRITE-BLOCK")
+    print(f"   draft:         {draft_path}")
+    print(f"   references:    {refs_path}  ({len(refs)} entries)")
+    print(f"   refmap:        {map_path}")
+    print(f"   WRITE-BLOCKs:  {blocks}  -> fill all of them, then run:")
+    print(f"     python review_check.py <review.md> --evidence {json_path} \\")
+    print(f"            --refmap {map_path} --strict")
     return json_path
 
 
@@ -251,8 +283,19 @@ def main():
         "--review-per-theme", type=int, default=8,
         help="Minimum exemplars per synthesis theme (default: 8)"
     )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="One-shot pipeline: retrieval -> HTML deck -> systematic-review "
+             "evidence base -> submission-ready review skeleton"
+    )
 
     args = parser.parse_args()
+
+    if args.full:
+        args.deck = True
+        args.review = True
+        if not args.deck_topic:
+            parser.error("--full requires --deck-topic (the review/deck title)")
 
     # Resolve query from --query or --query-file
     if args.query_file:
