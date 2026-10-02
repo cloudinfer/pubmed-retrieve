@@ -607,14 +607,237 @@ def build_closing(c: dict, page_no: int) -> str:
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
-def compose(c: dict) -> list[str]:
+# ---------------------------------------------------------------------------
+# M13-M18 · Systematic-review pages (rendered only when review evidence exists)
+#
+# These pages carry the review layer: research question, PRISMA flow, evidence
+# grading, convergence, gaps and conclusions. They are appended to the
+# descriptive deck rather than replacing it, so a reader sees both "what the
+# corpus looks like" and "what the corpus supports".
+# ---------------------------------------------------------------------------
+PICOS_ROWS = [
+    ("P", "肝细胞癌患者，不限分期与治疗方式"),
+    ("I", "CT / MRI / 超声 / PET 影像组学或影像人工智能模型"),
+    ("C", "不设强制对照；临床模型与联合模型均计入"),
+    ("O", "总生存、无复发生存、早期复发、治疗应答及预测性能"),
+    ("S", "原始研究与系统综述均纳入；述评与通信排除"),
+]
+
+
+def build_picos(c: dict, rv: dict, page_no: int) -> str:
+    left = "".join(
+        f'<div class="kv"><span class="k">{esc(k)}</span>'
+        f'<span class="v t-bodys">{esc(v)}</span></div>'
+        for k, v in PICOS_ROWS
+    )
+    prisma = rv.get("prisma", {})
+    right = [
+        f"数据库：PubMed（NCBI E-utilities），检索日期 {c['meta'].get('search_date', '')}。",
+        f"时间窗：{window_text(c['meta'])}，按入库日期（EDAT）限定。",
+        f"题录初筛后潜在纳入 {prisma.get('eligible_pending_fulltext', 0)} 篇，"
+        f"已确认纳入 {prisma.get('included_confirmed', 0)} 篇（全文复核待完成）。",
+        "偏倚风险与 GRADE 评级需全文复核后填写，本页不以推断填充。",
+    ]
+    right_html = "".join(f'<div class="item">{esc(t)}</div>' for t in right)
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">研究问题与纳入标准</h2>'
+        f'<div style="grid-column:1/10;margin-top:28px" class="stack">{left}</div>'
+        f'<div style="grid-column:11/17;margin-top:28px">'
+        f'<div class="eyebrow">执行口径</div>'
+        f'<div class="list" style="margin-top:14px">{right_html}</div></div>'
+    )
+    return page(layout="M13", label="研究问题", title="研究问题与 PICOS",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_prisma(c: dict, rv: dict, page_no: int) -> str:
+    p = rv.get("prisma", {})
+    ident = int(p.get("identified") or 1)
+    steps = [
+        ("数据库检出", p.get("identified", 0)),
+        ("去重后", p.get("records_screened", 0)),
+        ("题录初筛排除", p.get("excluded_screening_total", 0)),
+        ("进入全文评估", p.get("fulltext_assessed", 0)),
+        ("潜在纳入（待复核）", p.get("eligible_pending_fulltext", 0)),
+        ("已确认纳入", p.get("included_confirmed", 0)),
+    ]
+    rows = []
+    for name, val in steps:
+        w = pct(float(val), float(ident))
+        fill = ANCHOR if name in ("潜在纳入（待复核）", "进入全文评估") else ANCHOR3
+        rows.append(
+            '<div class="bar-row">'
+            f'<span class="name">{esc(name)}</span>'
+            f'<span class="track"><i style="width:{w:.2f}%;background:{fill}"></i></span>'
+            f'<span class="val t-num">{val}</span>'
+            "</div>"
+        )
+    ex = p.get("excluded_at_screening", [])[:4]
+    ex_html = "".join(
+        f'<div class="item">{esc(e["reason"])}　<b class="t-num">{e["count"]}</b></div>'
+        for e in ex
+    )
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">文献筛选流程（PRISMA 2020）</h2>'
+        f'<div style="grid-column:1/11;margin-top:26px">{"".join(rows)}</div>'
+        f'<div style="grid-column:11/17;margin-top:26px">'
+        f'<div class="eyebrow">主要排除原因</div>'
+        f'<div class="list" style="margin-top:12px">{ex_html}</div>'
+        f'<p class="t-cap" style="margin-top:18px">筛选在题录与摘要层面由确定性规则执行，'
+        f'每条排除记录均登记原因，计数可复核。</p></div>'
+    )
+    return page(layout="M14", label="筛选流程", title="PRISMA 筛选流程",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_levels(c: dict, rv: dict, page_no: int) -> str:
+    lv = rv.get("levels", [])[:7]
+    mx = max((x["count"] for x in lv), default=1) or 1
+    rows = []
+    for i, x in enumerate(lv):
+        w = pct(float(x["count"]), float(mx))
+        fill = ANCHOR if i == 0 else (ANCHOR2 if i < 3 else ANCHOR3)
+        rows.append(
+            '<div class="bar-row">'
+            f'<span class="name">{esc(x["label"])}</span>'
+            f'<span class="track"><i style="width:{w:.2f}%;background:{fill}"></i></span>'
+            f'<span class="val t-num">{x["count"]}</span>'
+            "</div>"
+        )
+    total = sum(x["count"] for x in lv) or 1
+    l4 = next((x["count"] for x in lv if x["level"] == "IV"), 0)
+    notes = [
+        f"Level IV（回顾性队列）占 {pct(l4, total):.1f}%，构成证据底座的主体。",
+        "分级由摘要中报告的研究设计推定，属暂定分级，须经全文复核确认。",
+        "「随机分配至训练集与验证集」是数据划分而非治疗随机化，已排除在 RCT 之外。",
+    ]
+    right = "".join(f'<div class="item">{esc(t)}</div>' for t in notes)
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">证据等级分布</h2>'
+        f'<div style="grid-column:1/11;margin-top:26px">{"".join(rows)}</div>'
+        f'<div style="grid-column:11/17;margin-top:26px">'
+        f'<div class="eyebrow">分级口径</div>'
+        f'<div class="list" style="margin-top:12px">{right}</div></div>'
+    )
+    return page(layout="M15", label="证据等级", title="证据等级分布",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_convergence(c: dict, rv: dict, page_no: int) -> str:
+    conv = rv.get("matrix", {}).get("convergence", [])[:7]
+    head = (
+        '<div style="display:grid;grid-template-columns:4fr 2fr 2fr 2fr 2fr;'
+        'column-gap:16px;padding-bottom:10px;border-bottom:1px solid ' + HAIR + '">'
+        '<span class="eyebrow">主题</span>'
+        '<span class="eyebrow" style="text-align:right">支持</span>'
+        '<span class="eyebrow" style="text-align:right">Level I/II</span>'
+        '<span class="eyebrow" style="text-align:right">外部验证</span>'
+        '<span class="eyebrow" style="text-align:right">强度</span></div>'
+    )
+    rows = [head]
+    for x in conv:
+        # Strength rides the blue scale rather than the alert colour: lighter
+        # reads as weaker, which is both semantically right and keeps --alert
+        # reserved for the few places where it is genuinely a warning.
+        fill = {"强": ANCHOR, "中": ANCHOR2}.get(x["strength"], ANCHOR3)
+        rows.append(
+            '<div style="display:grid;grid-template-columns:4fr 2fr 2fr 2fr 2fr;'
+            'column-gap:16px;padding:11px 0;border-bottom:1px solid ' + HAIR + '">'
+            f'<span class="t-bodys">{esc(x["theme"])}</span>'
+            f'<span class="t-bodys t-num" style="text-align:right">{x["support"]}</span>'
+            f'<span class="t-bodys t-num" style="text-align:right">'
+            f'{x["high_level_rate"]}%</span>'
+            f'<span class="t-bodys t-num" style="text-align:right">'
+            f'{x["external_validation_rate"]}%</span>'
+            f'<span class="t-bodys" style="text-align:right;color:{fill}">'
+            f'{esc(x["strength"])}</span></div>'
+        )
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">证据收敛汇总</h2>'
+        f'<div style="grid-column:{FULL};margin-top:24px">{"".join(rows)}</div>'
+        f'<p class="t-cap" style="grid-column:{FULL};margin-top:16px">'
+        f'收敛指标在全量潜在纳入文献池上计算，不在精选语料上计算，以避免抽样偏倚；'
+        f'强度阈值以文献池自身基线自校准。</p>'
+    )
+    return page(layout="M16", label="证据收敛", title="证据收敛汇总",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_gaps(c: dict, rv: dict, page_no: int) -> str:
+    gaps = rv.get("gaps", [])[:6]
+    left = "".join(
+        f'<div class="item"><b>{esc(g["type"])}</b> · {esc(g["gap"])}'
+        f'<div class="t-cap" style="margin-top:4px">{esc(g["evidence"])}</div></div>'
+        for g in gaps
+    )
+    agenda = [
+        "把外部验证设为最低门槛，而非加分项。",
+        "推动预测模型研究的前瞻注册，明确主要终点与分析计划。",
+        "优先投入影像-病理-多组学交叉验证研究。",
+        "开展模态与模型族的头对头比较研究。",
+        "统一报告规范：强制报告 AUC/C-index 及其队列语境。",
+    ]
+    right = "".join(f'<div class="item">{esc(t)}</div>' for t in agenda)
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">研究空白与研究议程</h2>'
+        f'<div style="grid-column:1/9;margin-top:24px">'
+        f'<div class="eyebrow">已识别空白</div>'
+        f'<div class="list" style="margin-top:12px">{left}</div></div>'
+        f'<div style="grid-column:9/17;margin-top:24px">'
+        f'<div class="eyebrow">议程建议</div>'
+        f'<div class="list" style="margin-top:12px">{right}</div></div>'
+    )
+    return page(layout="M17", label="空白与议程", title="研究空白与研究议程",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def build_review_conclusion(c: dict, rv: dict, page_no: int) -> str:
+    p = rv.get("prisma", {})
+    n = rv.get("numbers", {})
+    conv = rv.get("matrix", {}).get("convergence", [])
+    weak = [x["theme"] for x in conv if x["strength"] in ("弱", "极弱", "空白")]
+    auc = n.get("auc_overall") or {}
+    items = [
+        ("证据规模", f"潜在纳入 {p.get('eligible_pending_fulltext', 0)} 篇，"
+                     f"其中 Level I {sum(x['count'] for x in rv.get('levels', []) if x['level'] == 'I')} 篇。"),
+        ("性能水平", f"AUC/C-index 中位 {auc.get('median', '—')}"
+                     f"（四分位距 {auc.get('p25', '—')}–{auc.get('p75', '—')}），"
+                     f"训练集高于内部验证集。"),
+        ("验证强度", f"外部验证率 {pct(n.get('external_validation_n', 0), p.get('eligible_pending_fulltext', 1)):.1f}%，"
+                     f"前瞻性研究 {pct(n.get('prospective_n', 0), p.get('eligible_pending_fulltext', 1)):.1f}%。"),
+        ("薄弱方向", ("、".join(weak[:3]) + " 证据强度偏弱。") if weak else "各主题证据强度均衡。"),
+        ("结论边界", "全文复核与 GRADE 评级完成前，不支持临床推荐强度的判定。"),
+    ]
+    rows = "".join(
+        f'<div class="row"><div class="kv"><span class="k">{esc(k)}</span>'
+        f'<span class="v t-bodys">{esc(v)}</span></div></div>'
+        for k, v in items
+    )
+    body = (
+        f'<h2 class="t-h2" style="grid-column:{FULL}">综述结论</h2>'
+        f'<div style="grid-column:1/14;margin-top:26px" class="stack">{rows}</div>'
+    )
+    return page(layout="M18", label="综述结论", title="综述结论",
+                body=body, page=page_no, meta=c["meta"])
+
+
+def compose(c: dict, rv: dict | None = None) -> list[str]:
     pages: list[str] = []
     n = lambda: len(pages) + 1  # noqa: E731
 
     pages.append(build_cover(c, n()))
     pages.append(build_agenda(c, n()))
     pages.append(build_method(c, n()))
+
+    if rv:
+        pages.append(build_picos(c, rv, n()))
+        pages.append(build_prisma(c, rv, n()))
+
     pages.append(build_kpi(c, n()))
+
+    if rv and rv.get("levels"):
+        pages.append(build_levels(c, rv, n()))
+
     pages.append(build_journals(c, n()))
 
     if len(c["years"]) >= 2:
@@ -632,7 +855,16 @@ def compose(c: dict) -> list[str]:
     if len(duo_topics(c)) >= 2:
         pages.append(build_duo(c, n()))
 
+    if rv and rv.get("matrix", {}).get("convergence"):
+        pages.append(build_convergence(c, rv, n()))
+    if rv and rv.get("gaps"):
+        pages.append(build_gaps(c, rv, n()))
+
     pages.append(build_outlook(c, n()))
+
+    if rv:
+        pages.append(build_review_conclusion(c, rv, n()))
+
     pages.append(build_closing(c, n()))
     return pages
 
@@ -642,29 +874,31 @@ def default_template_path() -> str:
     return os.path.join(os.path.dirname(here), "assets", "deck", "template-medical.html")
 
 
-def render_deck(content: dict, template_path: str | None = None) -> str:
+def render_deck(content: dict, template_path: str | None = None,
+                review: dict | None = None) -> str:
     """Inject rendered slides into the template and return the full HTML string."""
     path = template_path or default_template_path()
     if not os.path.exists(path):
         raise SystemExit(f"Template not found: {path}")
     with open(path, "r", encoding="utf-8") as fh:
         template = fh.read()
-    slides = compose(content)
+    slides = compose(content, review)
     return (
         template.replace("{{TITLE}}", esc(content["meta"]["topic"]))
         .replace("{{SLIDES}}", "\n".join(slides))
     )
 
 
-def write_deck(content: dict, out_path: str, template_path: str | None = None) -> int:
+def write_deck(content: dict, out_path: str, template_path: str | None = None,
+               review: dict | None = None) -> int:
     """Render and write the deck. Returns the page count."""
-    html_out = render_deck(content, template_path)
+    html_out = render_deck(content, template_path, review)
     parent = os.path.dirname(os.path.abspath(out_path))
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(html_out)
-    return len(compose(content))
+    return len(compose(content, review))
 
 
 def main() -> None:
@@ -672,13 +906,21 @@ def main() -> None:
     ap.add_argument("--content", required=True, help="Path to deck_content.json")
     ap.add_argument("--out", required=True, help="Output HTML path")
     ap.add_argument("--template", default=None, help="Template path (default: assets/deck/template-medical.html)")
+    ap.add_argument("--review", default=None,
+                    help="Path to review_evidence.json; adds the systematic-review pages")
     args = ap.parse_args()
 
     with open(args.content, "r", encoding="utf-8") as fh:
         content = json.load(fh)
 
-    pages = write_deck(content, args.out, args.template)
-    print(f"[deck] html -> {args.out}  ({pages} pages)")
+    review = None
+    if args.review:
+        with open(args.review, "r", encoding="utf-8") as fh:
+            review = json.load(fh)
+
+    pages = write_deck(content, args.out, args.template, review)
+    print(f"[deck] html -> {args.out}  ({pages} pages"
+          + (" , review pages included" if review else "") + ")")
 
 
 if __name__ == "__main__":

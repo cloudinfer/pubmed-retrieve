@@ -12,9 +12,16 @@ Usage:
     python pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
                          -o output/pubmed_results.csv \
                          --deck --deck-topic "radiomics in HCC prognosis"
+
+    # with Phase 5 + Phase 6 systematic review:
+    python pubmed_cli.py -f query.txt -s 2021/01/01 -e 2026/10/02 \
+                         -o output/pubmed_results.csv \
+                         --deck --deck-topic "radiomics in HCC prognosis" \
+                         --review
 """
 
 import argparse
+import json
 import sys
 import os
 from datetime import datetime
@@ -79,7 +86,6 @@ def summarize_results(results, query, start_date, end_date):
 
 def build_deck_outputs(args, query, end_date):
     """Phase 5: chain the deck content model + HTML deck renderer after retrieval."""
-    import json
     import types
     import re
 
@@ -115,9 +121,68 @@ def build_deck_outputs(args, query, end_date):
 
     slug = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (args.deck_topic or "deck")).strip("_")[:48] or "deck"
     deck_path = os.path.join(out_dir, f"{slug}_deck.html")
-    pages = db.write_deck(content, deck_path)
-    print(f"   html deck:     {deck_path}  ({pages} pages)")
+
+    review = None
+    review_path = None
+    if args.review:
+        review_path = build_review_outputs(args, query, end_date)
+        if review_path:
+            with open(review_path, "r", encoding="utf-8") as fh:
+                review = json.load(fh)
+
+    pages = db.write_deck(content, deck_path, review=review)
+    print(f"   html deck:     {deck_path}  ({pages} pages")
+    if review:
+        print("                    + systematic-review pages)")
+    else:
+        print(")")
     print("   next: run deck_validate.py, then hand deck_outline.md to the PPT step.")
+
+
+def build_review_outputs(args, query, end_date):
+    """Phase 6: build the systematic-review evidence base from the retrieved CSV."""
+    import types
+
+    try:
+        import review_evidence as re
+    except ImportError as exc:
+        print(f"\n[review] skipped: cannot import review_evidence ({exc})")
+        return None
+
+    out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
+    os.makedirs(out_dir, exist_ok=True)
+
+    ns = types.SimpleNamespace(
+        csv=args.output,
+        out_dir=out_dir,
+        topic=args.deck_topic or "",
+        query=query,
+        query_file=None,
+        start=args.start_date,
+        end=end_date,
+        max_results=args.max_results,
+        corpus_size=args.review_corpus_size,
+        per_theme=args.review_per_theme,
+        search_date=datetime.now().strftime("%Y-%m-%d"),
+    )
+
+    print("\n=== Building systematic-review evidence base (Phase 6) ===")
+    ev = re.build(ns)
+    json_path = os.path.join(out_dir, "review_evidence.json")
+    md_path = os.path.join(out_dir, "review_corpus.md")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        import json as _json
+        _json.dump(ev, fh, ensure_ascii=False, indent=2)
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write(re.render_corpus_md(
+            ev["meta"], ev["prisma"], ev["levels"], ev["corpus"],
+            ev["numbers"], ev["matrix"], ev["gaps"],
+            {k: __import__("re").compile(v, __import__("re").IGNORECASE)
+             for k, v in re.REVIEW_THEMES.items()}
+        ) + "\n")
+    print(f"   evidence json: {json_path}")
+    print(f"   corpus digest: {md_path}")
+    return json_path
 
 
 def main():
@@ -169,6 +234,22 @@ def main():
     parser.add_argument(
         "--topics-file", default=None,
         help="JSON {name: regex} overriding the default topic buckets (used with --deck)"
+    )
+    parser.add_argument(
+        "--review", action="store_true",
+        help="After the deck, also build the Phase 6 systematic-review evidence base"
+    )
+    parser.add_argument(
+        "--review-out-dir", default=None,
+        help="Directory for review outputs (default: same directory as --output)"
+    )
+    parser.add_argument(
+        "--review-corpus-size", type=int, default=90,
+        help="Representative corpus size for the review digest (default: 90)"
+    )
+    parser.add_argument(
+        "--review-per-theme", type=int, default=8,
+        help="Minimum exemplars per synthesis theme (default: 8)"
     )
 
     args = parser.parse_args()
