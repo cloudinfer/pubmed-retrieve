@@ -1,4 +1,4 @@
-# 学术汇报 deck 锁定版式目录 · M01–M12
+# 学术汇报 deck 锁定版式目录 · M01–M20
 
 正文页只能从下表的 12 个具名版式中选择，**不得临时发明页面结构**。
 新增版式必须同时改三处：`references/deck-layouts.md`、`assets/deck/template-medical.html`、`scripts/deck_validate.py`。

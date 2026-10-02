@@ -18,9 +18,9 @@ description: Use whenever the user wants to search for or retrieve literature in
 
 | 子目录 | 内容 |
 |--------|------|
-| `scripts/` | `pubmed_cli.py`（检索 CLI）、`pubmed_script.py`（E-utilities 实现）、`deck_content.py` / `deck_build.py` / `deck_validate.py`（Phase 5 deck 链路） |
+| `scripts/` | `pubmed_cli.py`（检索 CLI）、`pubmed_script.py`（E-utilities 实现）、`deck_content.py` / `deck_build.py` / `deck_validate.py`（Phase 5 deck 链路）、`review_evidence.py` / `review_compose.py` / `review_check.py`（Phase 6 综述链路） |
 | `assets/deck/` | `template-medical.html`（医学深蓝瑞士风单文件 deck 模板） |
-| `references/` | `deck-theme.md`（配色/字号/网格规范）、`deck-layouts.md`（M01–M12 版式契约） |
+| `references/` | `deck-theme.md`（配色/字号/网格规范）、`deck-layouts.md`（M01–M20 版式契约）、`review-standard.md`（期刊门槛与语言禁忌）、`review-criteria.md`（**纳入标准/PICOS 定制指南，Phase 6 必读**） |
 
 常见安装位置：
 
@@ -328,7 +328,7 @@ Phase 4 完成后**不要停下等待用户指示**，直接进入 Phase 5（dec
 | 文件 | 内容 |
 |------|------|
 | `references/deck-theme.md` | 调色板白名单、字体栈、网格与安全边距、字号阶梯、禁止清单 F01–F12 |
-| `references/deck-layouts.md` | M01–M12 锁定版式契约、`deck_content.json` 字段定义、内容映射与写作规则 |
+| `references/deck-layouts.md` | M01–M20 锁定版式契约、`deck_content.json` 字段定义、内容映射与写作规则 |
 
 **交付两件**：① 单文件 HTML deck（高保真、可翻页演示、可打印为 PDF）；② 可编辑 `.pptx`。
 
@@ -394,6 +394,28 @@ HTML deck 是视觉稿；**默认必须产出**可编辑 `.pptx`（无需用户�
 > 字号阶梯见 `references/deck-theme.md`；页面顺序与每页内容见 `deck_outline.md`；
 > 标题一律左对齐贴网格线，不居中。
 
+##### ⚠️ SlideDSL 写入与校验的四个高频坑
+
+`.pptx` 由平台的 `slidep` 工具链按页写入（`upsert-dsl --page-index <0基>`，
+省略或 `-1` 表示追加）。以下四点都是实际踩过的：
+
+1. **`upsert-dsl` 会静默失败。** 它可能返回 `Error: /localapi/keyframe HTTP 500:
+   presentation is not open`，而**批量循环不会因此中断**——后续每一页都退化成「追加」，
+   最终页序全乱。**写入后必须回读校验页序**：解析 `.pptx` 的
+   `ppt/slides/slide{N}.xml` 中 `<a:t>` 文本，逐页比对标题是否与 `deck_outline.md` 一致。
+   发现错位时**重建尾部**：先追加最后一页，再用 `--page-index` 从后往前逐页覆盖。
+2. **元素不得溢出父容器。** 条形图的宽度要留出父容器余量，
+   否则 lint 报 P0 `child containment overflow`（实测 `right+89px` / `+91px` / `+79px`）。
+   竖向同理，表格行 `padding` 过大或段落过长会报 `Bottom+36px`。
+   压缩手段：减小条宽、收 `padding`、降 `lineHeight`、删冗余句。
+3. **不是所有 CSS 属性都支持。** `marginTop: 'auto'` 与 `lineSpacing` 会让 lint 失败；
+   改用 `justifyContent: 'space-between'` 等 flex 属性实现同效果。
+   版式仅支持 flexbox（**无 grid、无 `calc()`**），画布固定 1280×720，
+   换行用 `<br />`，行内样式用 `<span style>`，**不支持 `<strong>` / `<em>`**。
+4. **`slidep screenshot` 在 Windows 上不可用**（报
+   `The argument 'filename' must be a file URL object`，疑似要求 Linux 路径）。
+   改用**直接解析 `.pptx` XML** 来验收内容与页序，不要卡在截图上。
+
 #### 5.5 提交
 
 用 `present_files` **一次性**展示 HTML deck 与 `.pptx`，并在答复中说明：
@@ -422,7 +444,22 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
 凡声明「要可发表」「要期刊水平」「要投稿」，一律按 `references/review-standard.md`
 执行；未达门槛不得交付。
 
-#### 6.1 构建证据底座
+#### 6.1 定制纳入标准 → 构建证据底座
+
+> **Step 0（必做，不可跳过）：先按本次主题改写纳入标准与 PICOS。**
+>
+> `review_evidence.py` 与 `review_compose.py` 内置的纳入标准是**上一轮肝脏主题任务留下的
+> 肝细胞癌专用规则**（`POP_IN` / `OTHER_PRIMARY` / PICOS 措辞）。把它用在其他主题上
+> **不会报错**——它只会静默排除几乎全部记录。真实案例：一次「影像组学」检索命中 395 条，
+> 用内置标准后「潜在纳入」只剩 **14 条**（误排除 374 条，占 95%）；综述骨架里还出现了
+> 「经病理或临床标准确诊的肝细胞癌患者」和 EphA2 受体。
+>
+> 为此两个脚本都加了**守卫**：当主题不含肝脏关键词（`hepat` / `hcc` / `liver` / `hepatic` / 肝）
+> 且未提供定制文件时，脚本**直接中止（exit 2）**，并在输出目录生成可编辑的模板：
+> `criteria_template.json` / `picos_template.json`。按模板填写后重跑即可。
+> 只有主题确属肝脏时才会放行，或用 `--allow-default-criteria` / `--allow-default-picos` 显式放行。
+>
+> 定制方法、字段含义与完整示例见 **`references/review-criteria.md`**。
 
 ```bash
 "$PY" "<SKILL_DIR>/scripts/review_evidence.py" \
@@ -430,12 +467,18 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
   --out-dir "<workspace>/output" \
   --topic "<检索主题>" \
   --query-file "<workspace>/.workbuddy/tmp_query.txt" \
+  --criteria-file "<workspace>/output/criteria.json" \
+  --themes-file "<workspace>/output/themes.json" \
   --start "2021/01/01" --end "2026/10/02" --max-results 2000 \
   --search-date "<今天 YYYY-MM-DD>"
 ```
 
 产出 `review_evidence.json`（PRISMA 计数、证据等级、定量信号、文献矩阵、收敛汇总、
-研究空白）与 `review_corpus.md`（代表文献摘要集）。
+研究空白；另记 `meta.criteria_source` 以便复核用了哪套判据）与 `review_corpus.md`（代表文献摘要集）。
+
+**筛选量级自检**：跑完先看 `eligible` 占 `identified` 的比例。
+若低于一半，多半是判据过紧或主题词没对齐，**先查判据再往下走**，不要直接交付。
+本次正确配置下该比例为 313/395 ≈ 79%。
 
 四条方法学约束（答复中必须声明）：
 
@@ -450,14 +493,24 @@ Phase 6 必须有自己的分析主题、证据分级与收敛汇总，**不得�
 "$PY" "<SKILL_DIR>/scripts/review_compose.py" \
   --evidence "<workspace>/output/review_evidence.json" \
   --csv "<workspace>/output/pubmed_results.csv" \
-  --out-dir "<workspace>/output" --topic "<检索主题>" [--regno "CRD4202xxxx"]
+  --out-dir "<workspace>/output" --topic "<检索主题>" \
+  --picos-file "<workspace>/output/picos.json" [--regno "CRD4202xxxx"]
 ```
+
+`--picos-file` 与上一步的 `--criteria-file` 是**两套必须同时提供的文件**，缺一不可：
+前者管**筛选判据**（正则），后者管**成文措辞**（PICO 表、纳入排除标准表、关键词）。
+两者都留痕：PICOS 来源写入 §2.1，判据来源写入 `review_evidence.json`。
 
 脚本自动写入**全部可从 CSV 确定性派生的内容**：中英题名与摘要的数字部分、
 PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布表、
 纳入研究特征表、定量信号表、主题收敛汇总表、PROBAST 与 GRADE 表结构、
 六项声明、Vancouver 参考文献、PRISMA 2020 核对表附录、检索式附录、
 引证样本清单附录、逐条评估表附录。
+
+**结果章表号由 `T_PRISMA`…`T_GAPS` 常量统一派生**（表 1 筛选计数 → 表 8 研究空白），
+表题与附录 A 核对表的「报告位置」列共用同一组常量。**不要在任何地方硬编码表号字面量**——
+历史上曾因此让核对表把 PROBAST 表标成「表 2」而正文实为「表 3」，
+`review_check.py` 的 R20 现在会阻断这类语义错位。
 
 只有**叙述性综合**留作 `WRITE-BLOCK`，每个块带明确任务描述、字数区间与**必引 PMID 清单**。
 写作因此是有约束的填空，不是自由发挥。
@@ -481,12 +534,43 @@ PICOS 表、完整检索式、PRISMA 计数表与流程图、证据等级分布�
 
 检查项：章节与 31 个小节完整性、写作块是否清零、引用编号越界、
 连续 300 字无引用、正文数字与证据底座一致性、绝对化表述、
-图表编号连续性、残留占位符、正文字数下限（系统综述 12,000 字）。
+图表编号连续性与**交叉引用语义**、残留占位符、正文字数下限（系统综述 12,000 字）。
+
+其中 R14/R20 针对的是排版前最容易漏掉的一类错误，二者都是 P0：
+
+| 规则 | 检查内容 |
+|------|----------|
+| R14 | 每个结果表都必须有 `**表 N　标题**` 编号表题；编号唯一、从 1 连续无跳号；任何「表 N」引用都能落到真实表题上 |
+| R20 | 附录 A 的 PRISMA 核对表「报告位置」列引用的表号，必须落在**语义相符**的表上（第 11/18 条须指向偏倚风险表、第 17 条指向特征表、第 22 条指向确定性表） |
+
+> 这两条是补上的历史缺口：此前只校验「编号连续」，不校验「指对了表」，
+> 于是把 PROBAST 标成「表 2」而正文实为「表 3」也能通过。
+> 注意核对表在**附录 A**（位于参考文献之后），因此 `review_check.py` 用全文而非
+> `split_body()` 之后的正文做这项检查——否则会漏检整张核对表。
 
 #### 6.5 排版为可编辑文档
 
 走 `tencent-docx` 将 Markdown 排版为论文格式 `.docx`（标题层级、中英题名、
 结构化摘要、表格、参考文献悬挂缩进）。
+
+**排版阶段的两条硬约束**：
+
+1. **必须保留正文既有的「表 N／图 N」编号，不得按出现顺序重新编号。**
+   综述正文的编号由 `review_compose.py` 统一派生（表 1–表 8），是唯一权威来源；
+   渲染器一旦按位置重新编号，就会与附录 A 核对表的引用脱节。
+   源 Markdown 里表题位于**表格之前**的整行加粗段落（`**表 3　纳入研究基本特征**`），
+   生成 HTML/Word 时需**向前看一行**取表题，取不到时保留表题缺失状态而不是自造编号。
+2. **不得改动正文内容。** 排版只负责版式；发现内容层问题（如交叉引用错误）
+   应回到 6.2/6.3 修源文件，而不是在 HTML/Word 里就地改字。
+
+> **Windows 环境绕行**：`tencent-docx` 的 `scripts/wb/local/setup-html-to-docx.sh`
+> 使用 Linux 布局的 `<venv>/bin/python` 判定依赖，在 Windows 上会**静默跳过安装**，
+> 随后转换阶段才报缺 `python-docx`。绕行方式是直接用 Windows 布局的解释器装依赖：
+>
+> ```bash
+> uv pip install --python "$HOME/.venv-html-to-docx/Scripts/python.exe" \
+>   --only-binary=:all: -r "<tencent-docx>/skills/html-to-docx/scripts/requirements.txt"
+> ```
 
 #### 6.6 扩展 deck 与 PPT
 
@@ -524,11 +608,18 @@ PROBAST 与 GRADE 尚未完成，已以占位表列出；所有引用 PMID 均�
 > ```bash
 > "$PY" "<SKILL_DIR>/scripts/pubmed_cli.py" -f query.txt -s "2021/01/01" -e "2026/10/02" \
 >   -o "<workspace>/output/pubmed_results.csv" \
->   --full --deck-topic "影像组学在肝细胞癌预后预测中的应用"
+>   --criteria-file output/criteria.json --picos-file output/picos.json \
+>   --review-themes-file output/themes.json \
+>   --full --deck-topic "<检索主题>"
 > ```
-> `--full` = 检索 → HTML deck（含 M13–M18）→ 证据底座 → 综述骨架 + 参考文献 + 引用映射，
+> `--full` = 检索 → HTML deck（含 M13–M20）→ 证据底座 → 综述骨架 + 参考文献 + 引用映射，
 > 并打印下一步的质检命令。其后仍需：填写 WRITE-BLOCK（6.3）→ 质检（6.4）→
 > 排版 `.docx`（6.5）→ 产出 `.pptx`（6.6）。
+>
+> `--full` 走的是**同一条纳入标准守卫**，且守卫**在检索发起前**执行：
+> 判据不合规时该命令直接以 exit 2 中止，`-o` 指定的旧 CSV 与 deck 内容模型**不会被覆盖**。
+> 因此**不要**为了试探而先跑一次 `--full`——主题非肝脏且未提供 `--criteria-file` 时，
+> 中止是预期行为，按生成的模板补文件即可。
 
 ## 依赖
 
@@ -552,7 +643,7 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
 6. **日期格式**: 严格使用 `YYYY/MM/DD`
 7. **PMID 校验**: 引用前必须回查，杜绝编造
 8. **deck 配色是白名单**: Phase 5 的颜色、字号、版式都锁死在规范文件里，
-   不得临时自定义 hex；Phase 5 版式为 M01–M12，启用 `--review` 后扩展到 M13–M18。
+   不得临时自定义 hex；版式全集为 M01–M20，其中 M13–M20 为综述页（启用 `--review` 后生成）。
    改配色必须同步改 `references/deck-theme.md` 与 `assets/deck/template-medical.html` 的 `:root`
 9. **deck 校验门槛**: `deck_validate.py` 的 P0 必须为 0 才能交付
 10. **Phase 6 证据分级为暂定**: 研究设计与证据等级由摘要中报告的方法学信息自动推断，
@@ -561,6 +652,17 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
     真正的「已纳入」必须在全文复核后确定
 12. **Phase 5/6 自动串联**: 检索完成后 deck（HTML + PPTX）与系统综述草稿**默认自动执行**，
     不询问用户；仅当用户本次请求明确不要时才跳过，并在答复中说明。
+13. **纳入标准必须按主题定制**: `--criteria-file` 与 `--picos-file` 是**必填项**。
+    脚本内置的是肝细胞癌专用判据，用于其他主题会静默误排除；
+    非肝脏主题未提供定制文件时脚本**直接中止（exit 2）**并生成模板，
+    这是有意为之的保护，不要用 `--allow-default-*` 绕过。
+    跑完先核对 `eligible / identified` 比例（正常约 80%，过低说明判据没对齐）。
+14. **图表编号以源文件为唯一权威**: 排版阶段必须保留 `review_compose.py` 派生的表号，
+    渲染器不得按出现顺序重新编号，否则会与附录 A 核对表脱节（`review_check.py` R20 会拦截）。
+15. **`.pptx` 写入后必须回读校验页序**: `slidep upsert-dsl` 可能静默失败导致页序错乱，
+    验收以 `.pptx` XML 解析结果为准；`slidep screenshot` 在 Windows 下不可用。
+16. **不要用剪辑式折衷掩盖失败**: 若某阶段确认无法完成（如排版脚本缺失），
+    明确告知用户并给出可复现的命令，而不是交付一个看起来完整但内容错位的产物。
 
 ## 常见问题
 
@@ -581,3 +683,14 @@ Phase 6 的 `review_evidence.py` / `review_compose.py` / `review_check.py` 同�
 | `tail` 后看不到统计 | `tail` 会截掉开头统计段；勿截断或改读 CSV 自行统计 |
 | 分桶占比合计超 100% | 属正常（可多重归类），需在报告中标注口径 |
 | 聚类关键词虚高 | 检查子串陷阱，短词加 `\b`（如 `spect`→`\bspect\b`） |
+| `[review_evidence] 已中止：…非肝脏主题`（exit 2） | 正常保护。按生成的 `criteria_template.json` 填写后加 `--criteria-file` 重跑 |
+| `[review_compose] 已中止：…肝细胞癌 PICOS`（exit 2） | 同上，改填 `picos_template.json` 后加 `--picos-file` |
+| 综述里出现与主题无关的疾病名/受体名 | 内置肝细胞癌 PICOS 泄漏。补 `--picos-file`，并重跑 6.2 |
+| 「潜在纳入」数量异常少（< 检索量一半） | 判据未按主题定制，被静默误排除；先查 `criteria.json` |
+| R14 表编号不连续 / 表号引用悬空 | 结果表缺 `**表 N　标题**` 表题；检查 compose 是否漏发 caption |
+| R20 PRISMA 核对表指向不符 | 核对表定位映射与正文表号脱节；表号须统一由 `T_*` 常量派生 |
+| 排版后表格编号与附录引用对不上 | 渲染器按位置重排了表号；改为向前取表题、保留原编号 |
+| `slidep` 报 `presentation is not open` | 写入静默失败；回读 `.pptx` XML 校验页序并重建尾部 |
+| `.pptx` 某页元素溢出 | 条形宽超父容器 / 行 padding 过大；减宽度、收 padding、降 lineHeight |
+| `slidep screenshot` 报 filename 错误 | Windows 已知问题；改用解析 `.pptx` XML 验收 |
+| `setup-html-to-docx.sh` 静默不装依赖 | Windows 硬编码 `bin/python`；直接用 `Scripts/python.exe` 装 requirements |

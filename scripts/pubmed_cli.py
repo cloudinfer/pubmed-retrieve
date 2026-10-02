@@ -138,6 +138,46 @@ def build_deck_outputs(args, query, end_date):
     print("   next: run deck_validate.py, then hand deck_outline.md to the PPT step.")
 
 
+def preflight_review(args, query, end_date):
+    """Load topic-specific review criteria/PICOS and refuse a topic mismatch.
+
+    Deliberately runs **before** the first network call. The guard rejects a
+    non-hepatic topic that is still using the built-in hepatocellular-carcinoma
+    defaults; checking it after retrieval would mean a rejected run had already
+    overwritten the caller's CSV and deck content model. Fail first, fail cheap.
+    """
+    out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
+    os.makedirs(out_dir, exist_ok=True)
+    topic = args.deck_topic or ""
+    args._picos = None
+
+    try:
+        import review_evidence as re_mod
+    except ImportError as exc:
+        print(f"[preflight] review_evidence unavailable ({exc}); review stages will be skipped")
+        return
+
+    re_mod.load_criteria(getattr(args, "criteria_file", None))
+    re_mod.guard_criteria(topic, query, getattr(args, "allow_default_criteria", False), out_dir)
+
+    picos_path = getattr(args, "picos_file", None)
+    if picos_path:
+        with open(picos_path, encoding="utf-8") as fh:
+            args._picos = json.load(fh)
+
+    try:
+        import review_compose as rc_mod
+    except ImportError as exc:
+        print(f"[preflight] review_compose unavailable ({exc})")
+        return
+
+    if picos_path:
+        rc_mod.PICOS_SOURCE = os.path.basename(picos_path)
+        rc_mod.PICOS_IS_DEFAULT = False
+    rc_mod.guard_picos(topic, args._picos,
+                       getattr(args, "allow_default_picos", False), out_dir)
+
+
 def build_review_outputs(args, query, end_date):
     """Phase 6: build the systematic-review evidence base from the retrieved CSV."""
     import types
@@ -151,6 +191,9 @@ def build_review_outputs(args, query, end_date):
     out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
     os.makedirs(out_dir, exist_ok=True)
 
+    # Criteria were already loaded and validated by preflight_review() before
+    # retrieval started; re-implementing the check here would be a second,
+    # silently-drifting copy of the rule.
     ns = types.SimpleNamespace(
         csv=args.output,
         out_dir=out_dir,
@@ -172,6 +215,8 @@ def build_review_outputs(args, query, end_date):
 
     print("\n=== Building systematic-review evidence base (Phase 6) ===")
     ev = re.build(ns)
+    ev.setdefault("meta", {})["criteria_source"] = re.CRITERIA_SOURCE
+    ev["meta"]["criteria_is_default"] = re.CRITERIA_IS_DEFAULT
     json_path = os.path.join(out_dir, "review_evidence.json")
     md_path = os.path.join(out_dir, "review_corpus.md")
     with open(json_path, "w", encoding="utf-8") as fh:
@@ -197,9 +242,11 @@ def build_review_outputs(args, query, end_date):
         return json_path
 
     print("\n=== Composing review skeleton (Phase 6.2) ===")
+    picos = getattr(args, "_picos", None)
+    topic = args.deck_topic or ev["meta"]["topic"]
     pmids = [r["pmid"] for r in ev["corpus"]]
     refs, mapping = rc.build_references(args.output, pmids)
-    draft = rc.compose(ev, refs, mapping, args.deck_topic or ev["meta"]["topic"], "")
+    draft = rc.compose(ev, refs, mapping, topic, "", picos)
 
     draft_path = os.path.join(out_dir, "review_draft.md")
     refs_path = os.path.join(out_dir, "review_references.md")
@@ -294,6 +341,28 @@ def main():
              "(defaults to --topics-file if given)"
     )
     parser.add_argument(
+        "--criteria-file", default=None,
+        help="JSON overriding the review's PICOS eligibility criteria "
+             "(pop_in/pop_strong/other_primary/idx_in/out_in + labels). "
+             "REQUIRED for any non-hepatic topic -- see references/review-criteria.md"
+    )
+    parser.add_argument(
+        "--picos-file", default=None,
+        help="JSON overriding the review's PICOS wording "
+             "(population/index/comparator/outcome/study_type/…/keywords). "
+             "REQUIRED for any non-hepatic topic"
+    )
+    parser.add_argument(
+        "--allow-default-criteria", action="store_true",
+        help="Permit the built-in hepatocellular-carcinoma screening criteria "
+             "on a non-hepatic topic (normally refused)"
+    )
+    parser.add_argument(
+        "--allow-default-picos", action="store_true",
+        help="Permit the built-in hepatocellular-carcinoma PICOS wording "
+             "on a non-hepatic topic (normally refused)"
+    )
+    parser.add_argument(
         "--full", action="store_true",
         help="One-shot pipeline: retrieval -> HTML deck -> systematic-review "
              "evidence base -> submission-ready review skeleton"
@@ -315,6 +384,14 @@ def main():
         query = args.query
 
     end_date = args.end_date or datetime.now().strftime("%Y/%m/%d")
+
+    # Preflight BEFORE the first network call. The eligibility-criteria guard
+    # rejects a non-hepatic topic that is still using the hepatocarcinoma
+    # defaults; running it after retrieval would mean a rejected run had
+    # already overwritten the caller's CSV and deck content model with data
+    # screened by the wrong rules. Fail first, fail cheap.
+    if args.review or args.full:
+        preflight_review(args, query, end_date)
 
     print(f"\n=== Searching PubMed ===")
     print(f"   Query:      {query}")

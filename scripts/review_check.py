@@ -216,14 +216,59 @@ def check_language(body: str, rep: Report) -> None:
 
 
 def check_tables(body: str, rep: Report) -> None:
-    for label in ("表 1", "表 2", "表 3", "表 4", "表 5", "表 6"):
-        if label not in body:
-            rep.add(P1, f"R14 正文未出现 {label}")
+    """Table numbers must be unique, contiguous, and cross-reference correctly.
+
+    Two failure modes are guarded here, both observed in practice:
+
+    * a result table emitted without a caption, which lets the downstream
+      renderer renumber tables positionally and drift the body out of sync with
+      the cross-references; and
+    * a PRISMA checklist row pointing at a table that exists but covers a
+      different topic (PROBAST was cited as "表 2" while the body numbered it
+      "表 3"), which reads as valid because the number resolves.
+    """
+    caps = [int(x) for x in re.findall(r"\*\*表\s*(\d+)\s*[　\s]", body)]
+    if not caps:
+        rep.add(P0, "R14 正文未发现任何编号表题（格式应为 **表 N　标题**）")
+    cap_set = set(caps)
+    dup = sorted({n for n in caps if caps.count(n) > 1})
+    if dup:
+        rep.add(P0, "R14 表题编号重复：" + "、".join(f"表 {n}" for n in dup))
+    for i in range(1, (max(caps) if caps else 0) + 1):
+        if i not in cap_set:
+            rep.add(P0, f"R14 表编号不连续：缺 表 {i}")
+
     if "图 1" not in body:
         rep.add(P1, "R15 正文未出现图 1（PRISMA 流程图）")
+
+    # --- cross-reference resolution -----------------------------------------
+    captions = {int(n): t for n, t in re.findall(r"\*\*表\s*(\d+)\s*[　\s]+([^\n*]+)", body)}
+    dangling = sorted(n for n in {int(x) for x in re.findall(r"表\s*(\d+)", body)}
+                      if n not in cap_set)
+    if dangling:
+        rep.add(P0, "R14 表号引用悬空（正文无此表题）："
+                    + "、".join(f"表 {n}" for n in dangling))
+
+    # Each entry maps a PRISMA checklist item to the wording its target table
+    # must contain. Only semantically unambiguous items are listed.
+    expect = {
+        "11": ("PROBAST", "偏倚"),
+        "17": ("特征", "CHARMS"),
+        "18": ("PROBAST", "偏倚"),
+        "22": ("GRADE", "确定性"),
+    }
+    for row in re.findall(r"^\|\s*(\d+[a-f]?)\s*\|[^|]*\|([^|]*)\|[^|]*\|", body, re.M):
+        num, loc = row[0], row[1]
+        if num not in expect:
+            continue
+        for m in re.finditer(r"表\s*(\d+)", loc):
+            tno = int(m.group(1))
+            cap = captions.get(tno, "")
+            if tno in cap_set and not any(tok in cap for tok in expect[num]):
+                rep.add(P0, f"R20 PRISMA 核对表第 {num} 条指向 表 {tno}「{cap}」，"
+                            f"与条目语义不符（应为含 {'/'.join(expect[num])} 的表）")
     figs = sorted({int(x) for x in re.findall(r"图\s*(\d+)", body)})
-    tabs = sorted({int(x) for x in re.findall(r"表\s*(\d+)", body)})
-    for seq in (figs, tabs):
+    for seq in (figs, sorted(cap_set)):
         for i in range(1, len(seq) + 1):
             if i not in seq:
                 rep.add(P1, f"R16 图表编号不连续：缺 {i}")
@@ -280,7 +325,10 @@ def main() -> None:
     check_citation_density(body, rep)
     check_counts(body, evidence, rep)
     check_language(body, rep)
-    check_tables(body, rep)
+    # Table numbers and their cross-references are checked on the whole document:
+    # the PRISMA checklist lives in 附录 A, i.e. after 参考文献, so split_body()
+    # would hide exactly the rows whose cross-references need validating.
+    check_tables(strip_comments(raw), rep)
     check_placeholders(body, rep)
     n_chars = check_length(body, rep)
 

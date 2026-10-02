@@ -126,6 +126,7 @@ POP_IN = r"hepatocellular|\bhcc\b|liver (?:cancer|carcinoma|tumor|tumour|neoplas
 # studies get waved through as HCC populations. The same substring trap that
 # the skill already documents for `spect` / `oral` / `us`.
 HCC_STRONG = r"hepatocellular(?!\s+receptor)|\bhcc\b|\bhepatoma\b"
+POP_STRONG = HCC_STRONG  # population-specific "owns the title" pattern
 OTHER_PRIMARY = (
     r"glioblastoma|glioma|breast cancer|breast tumour|lung cancer|non-small[- ]cell"
     r"|colorectal|pancreatic|gastric cancer|prostate|cholangiocarcinoma"
@@ -136,6 +137,23 @@ OTHER_PRIMARY = (
 IDX_IN = r"radiomic|radiogenomic|deep learning|machine learning|convolutional|\bcnn\b|artificial intelligence|\bai\b|nomogram|signature|texture analys|image feature"
 OUT_IN = r"prognos|survival|recurrence|relapse|\bpfs\b|\bos\b|hazard ratio|risk stratif|outcome|predict"
 NONRESEARCH = r"^(?:editorial|comment|correction|erratum|retraction|letter|reply|author reply|published erratum)"
+
+# Exclusion reason labels are derived from the active PICOS configuration, so a
+# non-HCC topic does not end up reporting "population mismatch: not HCC".
+POP_LABEL = "目标人群"
+OTHER_PRIMARY_LABEL = "非目标原发肿瘤（题名主导）"
+IDX_LABEL = "影像组学或影像人工智能方法"
+OUT_LABEL = "预后/诊断结局"
+
+# Provenance of the active criteria. Everything above describes hepatocellular
+# carcinoma, which is wrong for every other topic and -- crucially -- wrong
+# silently. main() calls guard_criteria() to turn that silence into a failure,
+# and the source is recorded in review_evidence.json so the run is auditable.
+CRITERIA_SOURCE = "builtin-hepatocellular-carcinoma"
+CRITERIA_IS_DEFAULT = True
+
+BAR = "=" * 78
+
 NEGATION = (
     r"\bno significant|\bnot significant|did not (?:improve|predict|show|achieve)|failed to"
     r"|poor performance|limited (?:value|utility)|no (?:added|incremental) value"
@@ -202,17 +220,19 @@ def screen(records: list[dict]) -> dict:
             excluded["非研究型文献（述评/更正/通信）"] += 1
             continue
         if not re.search(POP_IN, hay):
-            excluded["人群不符：未涉及肝细胞癌/肝脏原发肿瘤"] += 1
+            excluded[f"人群不符：未涉及{POP_LABEL}"] += 1
             continue
         title_l = rec["title"].lower()
-        if re.search(OTHER_PRIMARY, title_l) and not re.search(HCC_STRONG, title_l):
-            excluded["人群不符：原发肿瘤非肝细胞癌（题名主导）"] += 1
+        if OTHER_PRIMARY and re.search(OTHER_PRIMARY, title_l) and not (
+            POP_STRONG and re.search(POP_STRONG, title_l)
+        ):
+            excluded[f"人群不符：原发肿瘤非{OTHER_PRIMARY_LABEL}"] += 1
             continue
         if not re.search(IDX_IN, hay):
-            excluded["干预/暴露不符：无影像组学或影像人工智能方法"] += 1
+            excluded[f"干预/暴露不符：无{IDX_LABEL}"] += 1
             continue
         if not re.search(OUT_IN, hay):
-            excluded["结局不符：无预后或生存相关终点"] += 1
+            excluded[f"结局不符：无{OUT_LABEL}"] += 1
             continue
         screened.append(rec)
 
@@ -827,6 +847,99 @@ def load_themes(path: str | None) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()}
 
 
+def load_criteria(path: str | None) -> None:
+    """Override the eligibility criteria (PICOS) from a JSON file.
+
+    Keys (all optional, regex strings): ``pop_in``, ``pop_strong``,
+    ``other_primary``, ``idx_in``, ``out_in``, plus the human-readable labels
+    ``pop_label``, ``other_primary_label``, ``idx_label``, ``out_label``.
+    Defaults reproduce the original hepatocellular-carcinoma criteria -- see
+    :func:`guard_criteria` for why that default is dangerous on other topics.
+    """
+    global CRITERIA_SOURCE, CRITERIA_IS_DEFAULT
+    if not path:
+        return
+    global POP_IN, POP_STRONG, OTHER_PRIMARY, IDX_IN, OUT_IN
+    global POP_LABEL, OTHER_PRIMARY_LABEL, IDX_LABEL, OUT_LABEL
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if "pop_in" in data:
+        POP_IN = str(data["pop_in"])
+    if "pop_strong" in data:
+        POP_STRONG = str(data["pop_strong"])
+    if "other_primary" in data:
+        OTHER_PRIMARY = str(data["other_primary"])
+    if "idx_in" in data:
+        IDX_IN = str(data["idx_in"])
+    if "out_in" in data:
+        OUT_IN = str(data["out_in"])
+    for key, name in (("pop_label", "POP_LABEL"),
+                      ("other_primary_label", "OTHER_PRIMARY_LABEL"),
+                      ("idx_label", "IDX_LABEL"),
+                      ("out_label", "OUT_LABEL")):
+        if key in data:
+            globals()[name] = str(data[key])
+    CRITERIA_SOURCE = os.path.basename(path)
+    CRITERIA_IS_DEFAULT = False
+
+
+def write_criteria_template(path: str) -> str:
+    """Drop an editable criteria skeleton next to the output so the caller can
+    fill it in instead of guessing the key names."""
+    tpl = {
+        # Placeholders stay free of backslashes so the file stays readable once
+        # JSON-escaped; short tokens must still get \b when you fill them in.
+        "pop_in": "疾病名A|疾病 A 全称|常用缩写",
+        "pop_strong": "题名中出现即可判定为目标人群的强信号（无则填 (?!) 表示永不匹配）",
+        "other_primary": "其他原发肿瘤正则；无排除项则填空串",
+        "idx_in": IDX_IN,
+        "out_in": OUT_IN,
+        "pop_label": "目标人群",
+        "other_primary_label": "非目标原发肿瘤（题名主导）",
+        "idx_label": IDX_LABEL,
+        "out_label": OUT_LABEL,
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(tpl, fh, ensure_ascii=False, indent=2)
+    return path
+
+
+def guard_criteria(topic: str, query: str, allow_default: bool, out_dir: str) -> None:
+    """Refuse to screen a non-hepatic topic with the built-in HCC criteria.
+
+    The built-in ``POP_IN`` / ``OTHER_PRIMARY`` describe hepatocellular
+    carcinoma. Running them against an unrelated topic does not fail -- it
+    quietly excludes almost everything (in the radiomics run this dropped
+    374/395 records and left 14 "eligible"). Silent is the problem, so the
+    guard fails loudly and hands back a criteria skeleton to edit.
+    """
+    if not CRITERIA_IS_DEFAULT or allow_default:
+        return
+    hay = f"{topic}\n{query}".lower()
+    if not hay.strip() or re.search(r"hepat|\bhcc\b|liver|hepatic|肝", hay):
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    tpl = write_criteria_template(os.path.join(out_dir, "criteria_template.json"))
+    sys.stderr.write(
+        f"\n{BAR}\n"
+        "[review_evidence] 已中止：正在用内置纳入标准筛选非肝脏主题。\n"
+        "\n"
+        "内置 POP_IN / OTHER_PRIMARY 是针对「肝细胞癌」硬编码的。用于其他主题时\n"
+        "不会报错，只会静默排除几乎全部记录（真实案例：395 条中误排除 374 条，\n"
+        "「潜在纳入」仅剩 14 条）。\n"
+        "\n"
+        f"本次主题：{topic or '（未提供）'}\n"
+        f"已生成模板：{tpl}\n"
+        "\n"
+        "请按主题填写后重跑：\n"
+        f"  --criteria-file \"{tpl}\"\n"
+        "\n"
+        "确需沿用内置标准（仅肝脏主题适用）时加 --allow-default-criteria。\n"
+        f"{BAR}\n"
+    )
+    sys.exit(2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build a systematic-review evidence base from a PubMed CSV.")
     ap.add_argument("--csv", required=True)
@@ -840,10 +953,23 @@ def main() -> None:
     ap.add_argument("--corpus-size", default=90, type=int, help="Representative corpus size")
     ap.add_argument("--per-theme", default=8, type=int, help="Minimum exemplars per theme")
     ap.add_argument("--themes-file", default=None, help="JSON {theme: regex} overriding synthesis themes")
+    ap.add_argument("--criteria-file", default=None,
+                    help="JSON overriding PICOS eligibility criteria (pop_in/pop_strong/other_primary/idx_in/out_in + labels)")
+    ap.add_argument("--allow-default-criteria", action="store_true",
+                    help="Permit the built-in hepatocellular-carcinoma criteria on a non-hepatic topic (normally refused)")
     ap.add_argument("--search-date", default=__import__("datetime").date.today().isoformat())
     args = ap.parse_args()
 
+    load_criteria(args.criteria_file)
+    query = args.query
+    if not query and args.query_file and os.path.exists(args.query_file):
+        with open(args.query_file, encoding="utf-8") as fh:
+            query = fh.read().strip()
+    guard_criteria(args.topic, query, args.allow_default_criteria, args.out_dir)
+
     content = build(args)
+    content.setdefault("meta", {})["criteria_source"] = CRITERIA_SOURCE
+    content["meta"]["criteria_is_default"] = CRITERIA_IS_DEFAULT
     os.makedirs(args.out_dir, exist_ok=True)
 
     json_path = os.path.join(args.out_dir, "review_evidence.json")
@@ -863,6 +989,8 @@ def main() -> None:
     print(f"[review] identified={p['identified']} dedup={p['duplicates_removed']} "
           f"screened_out={p['excluded_screening_total']} eligible={p['eligible_pending_fulltext']}")
     print(f"[review] corpus={len(content['corpus'])} themes={len(content['themes'])} gaps={len(content['gaps'])}")
+    print(f"[review] criteria={CRITERIA_SOURCE}"
+          + ("  ⚠ 使用内置肝细胞癌标准" if CRITERIA_IS_DEFAULT else ""))
 
 
 if __name__ == "__main__":

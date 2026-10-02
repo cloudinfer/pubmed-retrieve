@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import re
+import sys
 
 import pandas as pd
 
@@ -28,12 +29,25 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 LEVEL_LABEL = {
     "I": "系统综述 / Meta 分析",
     "II": "随机对照试验",
-    "III": "队列 / 病例对照研究",
-    "IV": "横断面 / 病例系列",
-    "V": "病例报告",
-    "VI": "摘要不可用",
-    "VII": "专家意见 / 述评",
+    "III": "非随机对照研究",
+    "IV": "队列 / 病例对照研究",
+    "V": "描述性研究系统综述",
+    "VI": "单组描述性研究 / 病例系列",
+    "VII": "专家意见 / 述评 / 指南",
 }
+
+# Single source of truth for result-section table numbers. Captions, the PRISMA
+# checklist cross-references and review_check.py all key off these, so a table
+# can never be renumbered in one place and left stale in another.
+T_PRISMA = 1
+T_LEVELS = 2
+T_CHARACTERISTICS = 3
+T_PROBAST = 4
+T_NUMBERS = 5
+T_CONVERGENCE = 6
+T_GRADE = 7
+T_GAPS = 8
+T_MAX = T_GAPS
 
 PROBAST_DOMAINS = [
     ("研究对象 Participants", "纳入是否连续、数据来源是否贴近真实临床场景",
@@ -192,11 +206,15 @@ def characteristics_table(corpus: list[dict], mapping: dict[str, int]) -> list[s
         sample = max(cohort) if isinstance(cohort, list) and cohort else "—"
         val = "外部验证" if nums.get("external_validation") else (
             "前瞻性" if nums.get("prospective") else "内部验证")
-        sig = rec.get("signals") or []
-        endpoint = sig[0][:26] + "…" if sig else "—"
+        # ``signals`` holds raw abstract sentences, not extracted endpoints.
+        # Rendering them here produced truncated sentence fragments in the
+        # "预测终点" column, which read as data but were not. Endpoint, country,
+        # design, modality and modelling method all require full-text reading,
+        # so they stay as explicit "待提取" placeholders -- the same convention
+        # used for the PROBAST and GRADE shells.
         rows.append(
             f"| [{n}] | {rec.get('first_author', '匿名')}（{rec.get('year') or '—'}） | 待提取 | "
-            f"待提取 | {sample} | 待提取 | {endpoint} | 待提取 | {val} | {rec.get('level')} |"
+            f"待提取 | {sample} | 待提取 | 待提取 | 待提取 | {val} | {rec.get('level')} |"
         )
     return rows
 
@@ -323,14 +341,20 @@ def prisma_checklist() -> list[str]:
         ("23c", "讨论：对实践的启示"), ("23d", "讨论：对未来研究的启示"),
         ("24", "方案与注册"), ("25", "资助"), ("26", "利益冲突"), ("27", "数据可得性"),
     ]
+    # NOTE: every "表 N" below must match a caption actually emitted by compose().
+    # The table numbers are owned by the ``T_*`` constants below -- do not inline
+    # literals here, or the checklist silently drifts out of sync with the body
+    # (this happened: PROBAST was cited as 表 2 while the body numbered it 表 3).
     loc = {
         "1": "题名", "2": "摘要", "3": "1.1", "4": "1.2", "5": "2.2", "6": "2.3",
         "7": "2.4 / 附录 B", "8": "2.5", "9": "2.6", "10a": "2.7", "10b": "2.7",
-        "11": "2.8 / 表 2", "12": "2.9", "13a": "2.10", "13b": "2.10", "13c": "2.10",
+        "11": f"2.8 / 表 {T_PROBAST}", "12": "2.9", "13a": "2.10", "13b": "2.10", "13c": "2.10",
         "13d": "2.10", "13e": "2.10", "13f": "2.10", "14": "2.11", "15": "2.12",
-        "16a": "3.1 / 图 1", "16b": "3.1 / 表 1", "17": "3.2 / 表 1", "18": "3.3 / 表 2",
-        "19": "3.4", "20a": "3.5 / 表 4", "20b": "3.5", "20c": "3.5", "20d": "3.5",
-        "21": "3.6", "22": "3.7 / 表 3", "23a": "4.1", "23b": "4.4", "23c": "4.3",
+        "16a": "3.1 / 图 1", "16b": f"3.1 / 表 {T_PRISMA}", "17": f"3.2 / 表 {T_CHARACTERISTICS}",
+        "18": f"3.3 / 表 {T_PROBAST}",
+        "19": f"3.4 / 表 {T_NUMBERS}", "20a": f"3.5 / 表 {T_CONVERGENCE}",
+        "20b": "3.5", "20c": "3.5", "20d": "3.5",
+        "21": "3.6", "22": f"3.7 / 表 {T_GRADE}", "23a": "4.1", "23b": "4.4", "23c": "4.3",
         "23d": "4.3", "24": "5.1", "25": "5.2", "26": "5.3", "27": "5.4",
     }
     for num, text in items:
@@ -361,8 +385,66 @@ def theme_pmids(corpus: list[dict], theme: str, limit: int = 6) -> list[str]:
 # --------------------------------------------------------------------------- #
 # compose
 # --------------------------------------------------------------------------- #
+DEFAULT_PICOS = {
+    "population": "经病理或临床标准确诊的肝细胞癌患者，不限治疗方式",
+    "population_in": "题名或摘要明确涉及肝细胞癌或肝脏原发肿瘤",
+    "population_out": "原发肿瘤位于肝外；仅提及肝转移；仅出现 \"hepatocellular\" 作为蛋白或受体名称（如 EphA2 全称）",
+    "index": "基于 CT / MRI / 超声 / PET 的影像组学或影像人工智能模型",
+    "comparator": "传统临床病理模型、单一临床指标，或不同建模路径之间的比较",
+    "outcome": "总体生存、无复发生存与早期复发、病理学标志物、治疗应答",
+    "outcome_in": "生存、复发、病理学标志物、治疗应答中的至少一项",
+    "outcome_out": "仅诊断或分期，无预后或应答终点",
+    "study_type": "原始研究（含队列、病例对照）与系统综述 / Meta 分析",
+    "keywords": "肝细胞癌；影像组学；人工智能；预后；系统综述",
+}
+
+# The wording above is hepatocellular-carcinoma-specific. Left in place on an
+# unrelated topic it does not error -- it just prints a manuscript whose PICOS
+# table, inclusion criteria and keywords describe a different disease.
+# guard_picos() refuses that, and PICOS_SOURCE is recorded in the draft footer.
+PICOS_SOURCE = "builtin-hepatocellular-carcinoma"
+PICOS_IS_DEFAULT = True
+LIVER_HINT = r"hepat|\bhcc\b|liver|hepatic|肝"
+BAR = "=" * 78
+
+
+def guard_picos(topic: str, picos: dict | None, allow_default: bool, out_dir: str) -> None:
+    """Refuse to draft a non-hepatic review with the built-in HCC PICOS."""
+    if not PICOS_IS_DEFAULT or allow_default:
+        return
+    if re.search(LIVER_HINT, f"{topic}\n{json.dumps(picos or {}, ensure_ascii=False)}".lower()):
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    tpl_path = os.path.join(out_dir, "picos_template.json")
+    tpl = {k: (f"<按本次主题改写：{k}>" if k != "keywords" else "<主题词1；主题词2；主题词3>")
+           for k in DEFAULT_PICOS}
+    with open(tpl_path, "w", encoding="utf-8") as fh:
+        json.dump(tpl, fh, ensure_ascii=False, indent=2)
+    sys.stderr.write(
+        f"\n{BAR}\n"
+        "[review_compose] 已中止：正在用内置「肝细胞癌」PICOS 撰写非肝脏主题的综述。\n"
+        "\n"
+        "继续执行不会报错，但产出的 PICO 表、纳入标准与关键词会在描述另一种疾病\n"
+        "（真实案例：一篇影像组学综述的骨架里出现「经病理或临床标准确诊的肝细胞癌\n"
+        "患者」与 EphA2 受体，均与检索主题无关）。\n"
+        "\n"
+        f"本次主题：{topic or '（未提供）'}\n"
+        f"已生成模板：{tpl_path}\n"
+        "\n"
+        "请填写后重跑：\n"
+        f"  --picos-file \"{tpl_path}\"\n"
+        "\n"
+        "确需沿用内置标准（仅肝脏主题适用）时加 --allow-default-picos。\n"
+        f"{BAR}\n"
+    )
+    sys.exit(2)
+
+
 def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
-            topic: str, regno: str) -> str:
+            topic: str, regno: str, picos: dict | None = None) -> str:
+    P = dict(DEFAULT_PICOS)
+    if picos:
+        P.update({k: str(v) for k, v in picos.items() if v})
     meta = evidence["meta"]
     prisma = evidence["prisma"]
     corpus = evidence["corpus"]
@@ -421,7 +503,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append(f"**注册（Registration）：** {regno or '本综述未预先注册方案。'}")
     L.append("")
-    L.append("**关键词：** 肝细胞癌；影像组学；人工智能；预后；系统综述")
+    L.append(f"**关键词：** {P['keywords']}")
     L.append("")
     L.append(block("keywords",
                    ["将上方候选词替换为经 MeSH 核对的主题词，并补至 5–8 个",
@@ -453,11 +535,11 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("| 要素 | 内容 |")
     L.append("|---|---|")
-    L.append("| 人群（P） | 经病理或临床标准确诊的肝细胞癌患者，不限治疗方式 |")
-    L.append("| 指数检验（I） | 基于 CT / MRI / 超声 / PET 的影像组学或影像人工智能模型 |")
-    L.append("| 比较（C） | 传统临床病理模型、单一临床指标，或不同建模路径之间的比较 |")
-    L.append("| 结局（O） | 总体生存、无复发生存与早期复发、病理学标志物、治疗应答 |")
-    L.append("| 研究类型（S） | 原始研究（含队列、病例对照）与系统综述 / Meta 分析 |")
+    L.append(f"| 人群（P） | {P['population']} |")
+    L.append(f"| 指数检验（I） | {P['index']} |")
+    L.append(f"| 比较（C） | {P['comparator']} |")
+    L.append(f"| 结局（O） | {P['outcome']} |")
+    L.append(f"| 研究类型（S） | {P['study_type']} |")
     L.append("")
     L.append(block("objectives-narrative",
                    ["把上表转写成连贯段落",
@@ -480,14 +562,17 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
         L.append("本综述未预先注册方案；检索式、筛选判据与综合方法在提取开始前已由脚本固化，"
                  "未作事后修改。")
     L.append("")
+    L.append(f"纳入判据来源：`{PICOS_SOURCE}`"
+             + ("（⚠ 内置肝细胞癌标准，仅在肝脏主题下适用）" if PICOS_IS_DEFAULT else "")
+             + "。")
+    L.append("")
     L.append("### 2.2 纳入与排除标准")
     L.append("")
     L.append("| 维度 | 纳入 | 排除 |")
     L.append("|---|---|---|")
-    L.append("| 人群 | 题名或摘要明确涉及肝细胞癌或肝脏原发肿瘤 | 原发肿瘤位于肝外；仅提及肝转移；"
-             "仅出现 \"hepatocellular\" 作为蛋白或受体名称（如 EphA2 全称）|")
+    L.append(f"| 人群 | {P['population_in']} | {P['population_out']} |")
     L.append("| 指数检验 | 影像组学特征、影像人工智能或深度学习模型 | 仅常规影像定性判读，无定量特征提取 |")
-    L.append("| 结局 | 生存、复发、病理学标志物、治疗应答中的至少一项 | 仅诊断或分期，无预后或应答终点 |")
+    L.append(f"| 结局 | {P['outcome_in']} | {P['outcome_out']} |")
     L.append("| 研究类型 | 原始研究与系统综述 / Meta 分析 | 述评、更正、通信、会议摘要 |")
     L.append("| 语言与可及性 | 有英文题录与摘要 | 摘要缺失，题录层面无法评估 |")
     L.append("")
@@ -600,7 +685,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append(f"  潜在纳入      n = {prisma['eligible_pending_fulltext']}（待全文复核确定）")
     L.append("```")
     L.append("")
-    L.append("**表 1　筛选计数明细**")
+    L.append(f"**表 {T_PRISMA}　筛选计数明细**")
     L.append("")
     L += prisma_table(prisma)
     L.append("")
@@ -615,11 +700,11 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
              f"证据等级分布见下表。其中 {len(corpus)} 篇构成本综述的引证样本"
              f"（按证据等级优先、兼顾各主题覆盖度抽取）。")
     L.append("")
-    L.append("**证据等级分布**")
+    L.append(f"**表 {T_LEVELS}　证据等级分布**")
     L.append("")
     L += level_table(evidence["levels"])
     L.append("")
-    L.append("**表 2　纳入研究基本特征**")
+    L.append(f"**表 {T_CHARACTERISTICS}　纳入研究基本特征**")
     L.append("")
     L += characteristics_table(corpus, mapping)
     L.append("")
@@ -633,7 +718,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 3.3 偏倚风险")
     L.append("")
-    L.append("**表 3　PROBAST 偏倚风险评价（节选）**")
+    L.append(f"**表 {T_PROBAST}　PROBAST 偏倚风险评价（节选）**")
     L.append("")
     L += probast_shell(corpus, mapping)
     L.append("")
@@ -644,7 +729,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 3.4 单项研究结果")
     L.append("")
-    L.append("定量信号汇总（由题录自动抽取，需全文核对）：")
+    L.append(f"**表 {T_NUMBERS}　定量信号汇总（由题录自动抽取，需全文核对）**")
     L.append("")
     if numbers:
         L += numbers_table(numbers)
@@ -659,7 +744,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 3.5 证据综合")
     L.append("")
-    L.append("**表 4　主题证据收敛汇总**")
+    L.append(f"**表 {T_CONVERGENCE}　主题证据收敛汇总**")
     L.append("")
     L += convergence_table(matrix)
     L.append("")
@@ -696,7 +781,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 3.7 证据确定性")
     L.append("")
-    L.append("**表 5　GRADE 证据确定性概要**")
+    L.append(f"**表 {T_GRADE}　GRADE 证据确定性概要**")
     L.append("")
     L += grade_shell(matrix)
     L.append("")
@@ -732,7 +817,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 4.4 研究空白与展望")
     L.append("")
-    L.append("**表 6　研究空白清单**")
+    L.append(f"**表 {T_GAPS}　研究空白清单**")
     L.append("")
     L += gaps_table(gaps)
     L.append("")
@@ -864,17 +949,31 @@ def main() -> None:
     ap.add_argument("--out-dir", default=".")
     ap.add_argument("--topic", default="", help="Override the topic")
     ap.add_argument("--regno", default="", help="PROSPERO registration number")
+    ap.add_argument("--picos-file", default=None,
+                    help="JSON overriding PICOS wording (population/index/comparator/outcome/study_type/"
+                         "population_in/population_out/outcome_in/outcome_out/keywords)")
+    ap.add_argument("--allow-default-picos", action="store_true",
+                    help="Permit the built-in hepatocellular-carcinoma PICOS on a non-hepatic topic (normally refused)")
     args = ap.parse_args()
+
+    global PICOS_SOURCE, PICOS_IS_DEFAULT
+    picos = None
+    if args.picos_file:
+        with open(args.picos_file, "r", encoding="utf-8") as fh:
+            picos = json.load(fh)
+        PICOS_SOURCE = os.path.basename(args.picos_file)
+        PICOS_IS_DEFAULT = False
 
     with open(args.evidence, "r", encoding="utf-8") as fh:
         evidence = json.load(fh)
 
     topic = args.topic or evidence["meta"]["topic"]
+    guard_picos(topic, picos, args.allow_default_picos, args.out_dir)
     pmids = [r["pmid"] for r in evidence["corpus"]]
     refs, mapping = build_references(args.csv, pmids)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    draft = compose(evidence, refs, mapping, topic, args.regno)
+    draft = compose(evidence, refs, mapping, topic, args.regno, picos)
 
     draft_path = os.path.join(args.out_dir, "review_draft.md")
     with open(draft_path, "w", encoding="utf-8") as fh:
@@ -893,6 +992,8 @@ def main() -> None:
     print(f"[review] references  -> {refs_path}  ({len(refs)} entries)")
     print(f"[review] refmap      -> {map_path}")
     print(f"[review] write blocks: {blocks}  (must reach 0 before submission)")
+    print(f"[review] picos       <- {PICOS_SOURCE}"
+          + ("  ⚠ 使用内置肝细胞癌标准" if PICOS_IS_DEFAULT else ""))
 
 
 if __name__ == "__main__":

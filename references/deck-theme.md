@@ -204,7 +204,7 @@
 | F07 | 标题 `text-align: center` | P1 |
 | F08 | 引入外部资源（`<img>` / `<link>` / `<script src>` / `@import`） | P0 |
 | F09 | 非 Cover/Closing 页缺少页眉、页脚或页码 | P1 |
-| F10 | `data-layout` 不在 M01–M12 之内 | P0 |
+| F10 | `data-layout` 不在 M01–M20 之内 | P0 |
 | F11 | 表格单页超过 4 行文献条目 | P1 |
 | F12 | `--alert` 全篇出现超过 2 处 | P1 |
 

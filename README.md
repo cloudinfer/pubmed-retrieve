@@ -8,7 +8,7 @@
 - **全自动检索管道**：搜索 PMID → 获取详情 → 保存 CSV → 打印汇总表，一条命令完成
 - **结构化输出**：CSV 包含 PMID、标题、作者、期刊、日期、DOI、摘要
 - **统计汇总**：终端直接输出期刊分布、年份分布和文献列表
-- **期刊发表级系统综述**：从检索结果自动编制 PRISMA 2020 系统综述——证据底座（筛选计数、证据分级、定量信号、收敛汇总、研究空白）→ 综述骨架（确定性章节与全部表格由脚本产出，叙述部分留带必引文献清单的写作块）→ Vancouver 参考文献自动编号 → 期刊门槛质检器把关
+- **期刊发表级系统综述**：从检索结果自动编制 PRISMA 2020 系统综述——证据底座（筛选计数、证据分级、定量信号、收敛汇总、研究空白）→ 综述骨架（确定性章节与全部表格由脚本产出，叙述部分留带必引文献清单的写作块）→ Vancouver 参考文献自动编号 → 期刊门槛质检器把关。**纳入标准与 PICOS 按主题定制**，非目标主题误用内置判据会被守卫拦截而非静默误排除
 - **学术汇报 deck**：可把检索结果渲染成医学深蓝瑞士风 PPT（单文件 HTML + 可编辑 .pptx），内置版式校验器；接入综述后自动追加 M13–M18 综述页
 
 ## 安装
@@ -199,7 +199,7 @@ Search (edat) found 6699 results, retrieving top 10...
 - **可编辑 .pptx**：以 `deck_outline.md` 为素材，交由平台 PPT 能力生成。
 
 视觉方向固定为「医学专业 + 科研科技」：瑞士国际主义网格、直角色块、1px 发丝线、
-无阴影无渐变，主色医学深蓝 `#0A3D7C`。版式锁定为 M01–M12 共 12 种，
+无阴影无渐变，主色医学深蓝 `#0A3D7C`。版式为 M01–M20，接入综述后自动追加 M13–M18 综述页，
 配色/字号/网格规范见 `references/deck-theme.md`，版式契约见 `references/deck-layouts.md`。
 
 一键串联（检索 + 内容模型 + HTML deck）：
@@ -219,6 +219,36 @@ python scripts/deck_content.py --csv output/pubmed_results.csv --out-dir output 
 python scripts/deck_build.py    --content output/deck_content.json --out output/deck.html
 python scripts/deck_validate.py output/deck.html          # P0 必须为 0
 ```
+
+## 系统综述（Phase 6）
+
+在检索结果之上编制 PRISMA 2020 系统综述。**纳入标准必须按本次主题定制**——
+脚本内置的默认判据是肝细胞癌专用的，用在其他主题上不会报错，
+只会静默排除几乎全部记录（实测：395 条中误排除 374 条）。
+
+因此 `--criteria-file` 与 `--picos-file` 是必填项；非肝脏主题未提供时会**直接中止**
+并写出可编辑的模板。字段定义、写法规范与完整示例见 **`references/review-criteria.md`**。
+
+```bash
+# 1) 证据底座（PRISMA 计数、证据分级、定量信号、收敛汇总、研究空白）
+python scripts/review_evidence.py --csv output/pubmed_results.csv --out-dir output \
+    --topic "<检索主题>" --query-file query.txt \
+    --criteria-file output/criteria.json --themes-file output/themes.json \
+    --start 2021/01/01 --end 2026/10/02
+
+# 2) 综述骨架（确定性章节与全部表格由脚本产出，叙述留写作块）
+python scripts/review_compose.py --evidence output/review_evidence.json \
+    --csv output/pubmed_results.csv --out-dir output \
+    --topic "<检索主题>" --picos-file output/picos.json
+
+# 3) 填写作块后过质检（P0 必须为 0）
+python scripts/review_check.py output/review_draft.md \
+    --evidence output/review_evidence.json --refmap output/review_refmap.json --strict
+```
+
+质检器覆盖：章节与 31 个小节完整性、引用编号越界、连续 300 字无引用、
+正文数字与证据底座一致性、绝对化表述、**表号连续性与交叉引用语义**（R14/R20）、
+残留占位符、正文字数下限。
 
 ## PubMed 检索语法参考
 
