@@ -1,11 +1,17 @@
 """Compose a submission-ready systematic review skeleton from the evidence base.
 
 Everything that can be derived deterministically from the CSV is written by this
-script: reference list, PRISMA counts, evidence grading table, convergence table,
-study-characteristics table, GRADE shell, PROBAST shell, declarations and all
-four appendices. Only genuinely interpretive prose is left as a WRITE-BLOCK, each
-carrying an explicit brief, a word budget and a closed list of PMIDs that must be
-cited -- so the writing step is a constrained fill-in, never free invention.
+script: reference list, PRISMA counts, study-characteristics table, convergence
+table, GRADE shell, declarations and all four appendices. Two result tables are
+deliberately NOT emitted: the provisional evidence-level distribution and the
+PROBAST excerpt. Both would read as findings while actually being abstract-level
+guesses (levels) or empty placeholders (PROBAST), so bias/certainty assessment is
+deferred to the full-text phase (appendix D carries the per-study template), and
+each study's provisional level is only annotated per-row in the characteristics
+table and appendix C. Only genuinely interpretive prose is left as a WRITE-BLOCK,
+each carrying an explicit brief, a word budget and a closed list of PMIDs that
+must be cited -- so the writing step is a constrained fill-in, never free
+invention.
 
 Outputs
     review_draft.md        full skeleton, ready for the writing step
@@ -39,14 +45,17 @@ LEVEL_LABEL = {
 # Single source of truth for result-section table numbers. Captions, the PRISMA
 # checklist cross-references and review_check.py all key off these, so a table
 # can never be renumbered in one place and left stale in another.
+#
+# 表 2（证据等级分布）与旧表 4（PROBAST 偏倚风险评价（节选））已移除：
+# 前者是摘要级暂定推断，后者在题录阶段只能是整表「待评估」占位——两者都
+# 容易被读者当作已完成的评价结果。T_LEVELS / T_PROBAST 常量随之删除，
+# 引用它们的 PRISMA 核对表条目 11/18 已改指 §2.8 与附录 D。
 T_PRISMA = 1
-T_LEVELS = 2
-T_CHARACTERISTICS = 3
-T_PROBAST = 4
-T_NUMBERS = 5
-T_CONVERGENCE = 6
-T_GRADE = 7
-T_GAPS = 8
+T_CHARACTERISTICS = 2
+T_NUMBERS = 3
+T_CONVERGENCE = 4
+T_GRADE = 5
+T_GAPS = 6
 T_MAX = T_GAPS
 
 PROBAST_DOMAINS = [
@@ -164,18 +173,6 @@ def prisma_table(prisma: dict) -> list[str]:
     return rows
 
 
-def level_table(levels: list[dict]) -> list[str]:
-    rows = ["| 证据等级 | 研究设计 | 篇数 | 占比 |", "|---|---|---|---|"]
-    total = sum(x["count"] for x in levels) or 1
-    for x in levels:
-        rows.append(
-            f"| {x['level']} | {LEVEL_LABEL.get(x['level'], x.get('label', '—'))} | "
-            f"{x['count']} | {x['count'] / total * 100:.1f}% |"
-        )
-    rows.append(f"| **合计** | — | **{total}** | **100.0%** |")
-    return rows
-
-
 def convergence_table(matrix: dict) -> list[str]:
     rows = [
         "| 主题 | 支持研究数 | 覆盖度 | Level I/II 支持 | 外部验证支持 | 收敛强度 | 置信度 |",
@@ -216,15 +213,6 @@ def characteristics_table(corpus: list[dict], mapping: dict[str, int]) -> list[s
             f"| [{n}] | {rec.get('first_author', '匿名')}（{rec.get('year') or '—'}） | 待提取 | "
             f"待提取 | {sample} | 待提取 | 待提取 | 待提取 | {val} | {rec.get('level')} |"
         )
-    return rows
-
-
-def probast_shell(corpus: list[dict], mapping: dict[str, int], size: int = 12) -> list[str]:
-    head = "| # | " + " | ".join(d[0].split()[0] for d in PROBAST_DOMAINS) + " | 整体判定 |"
-    rows = [head, "|" + "---|" * (len(PROBAST_DOMAINS) + 2)]
-    for rec in corpus[:size]:
-        n = mapping.get(rec["pmid"], "?")
-        rows.append(f"| [{n}] | " + " | ".join(["待评估"] * len(PROBAST_DOMAINS)) + " | 待评估 |")
     return rows
 
 
@@ -275,7 +263,7 @@ def abstract_results(prisma: dict, levels: list[dict], matrix: dict, n_themes: i
             f"「{'」「'.join(c['theme'] for c in core)}」覆盖度超过 80%，"
             f"属概念性核心维度而非可区分的研究方向，不作为主要发现解读。"
         )
-    return head + f"证据等级分布以 {lvl}为主。" + theme_txt + "证据确定性待全文复核后评定。"
+    return head + f"研究设计以 {lvl}为主（按摘要中报告的设计暂定归类）。" + theme_txt + "证据确定性待全文复核后评定。"
     rows = ["| 空白类型 | 具体空白 | 依据 | 优先级 |", "|---|---|---|---|"]
     for g in gaps:
         rows.append(f"| {g['type']} | {g['gap']} | {g['evidence']} | {g['priority']} |")
@@ -348,17 +336,20 @@ def prisma_checklist() -> list[str]:
     loc = {
         "1": "题名", "2": "摘要", "3": "1.1", "4": "1.2", "5": "2.2", "6": "2.3",
         "7": "2.4 / 附录 B", "8": "2.5", "9": "2.6", "10a": "2.7", "10b": "2.7",
-        "11": f"2.8 / 表 {T_PROBAST}", "12": "2.9", "13a": "2.10", "13b": "2.10", "13c": "2.10",
+        "11": "2.8（PROBAST 域说明）", "12": "2.9", "13a": "2.10", "13b": "2.10", "13c": "2.10",
         "13d": "2.10", "13e": "2.10", "13f": "2.10", "14": "2.11", "15": "2.12",
         "16a": "3.1 / 图 1", "16b": f"3.1 / 表 {T_PRISMA}", "17": f"3.2 / 表 {T_CHARACTERISTICS}",
-        "18": f"3.3 / 表 {T_PROBAST}",
-        "19": f"3.4 / 表 {T_NUMBERS}", "20a": f"3.5 / 表 {T_CONVERGENCE}",
-        "20b": "3.5", "20c": "3.5", "20d": "3.5",
-        "21": "3.6", "22": f"3.7 / 表 {T_GRADE}", "23a": "4.1", "23b": "4.4", "23c": "4.3",
+        "18": "附录 D（全文复核后填写）",
+        "19": f"3.3 / 表 {T_NUMBERS}", "20a": f"3.4 / 表 {T_CONVERGENCE}",
+        "20b": "3.4", "20c": "3.4", "20d": "3.4",
+        "21": "3.5", "22": f"3.6 / 表 {T_GRADE}", "23a": "4.1", "23b": "4.5", "23c": "4.3",
         "23d": "4.3", "24": "5.1", "25": "5.2", "26": "5.3", "27": "5.4",
     }
+    # 条目 18（纳入研究偏倚风险）与 22（证据确定性结果）在题录阶段不产出结果，
+    # 如实标注为待全文复核，不得虚标「已报告」。
+    status_map = {"18": "待全文复核", "22": "待全文复核"}
     for num, text in items:
-        rows.append(f"| {num} | {text} | {loc.get(num, '—')} | 已报告 |")
+        rows.append(f"| {num} | {text} | {loc.get(num, '—')} | {status_map.get(num, '已报告')} |")
     return rows
 
 
@@ -631,8 +622,9 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     for name, point, risk in PROBAST_DOMAINS:
         L.append(f"| {name} | {point} | {risk} |")
     L.append("")
-    L.append("整体偏倚风险取四个域中的最差值。题录层面只能给出\"待评估\"占位，"
-             "**不得以摘要推断填充判定结果**。")
+    L.append("整体偏倚风险取四个域中的最差值。偏倚风险评价在**全文复核阶段**执行"
+             "（逐条评估表模板见附录 D），题录与摘要层面不产出判定结果，"
+             "**不得以摘要推断填充**。")
     L.append("")
     L.append("### 2.9 效应量")
     L.append("")
@@ -696,13 +688,11 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
     L.append("")
     L.append("### 3.2 纳入研究特征")
     L.append("")
-    L.append(f"潜在纳入记录 {prisma['eligible_pending_fulltext']} 条，"
-             f"证据等级分布见下表。其中 {len(corpus)} 篇构成本综述的引证样本"
-             f"（按证据等级优先、兼顾各主题覆盖度抽取）。")
-    L.append("")
-    L.append(f"**表 {T_LEVELS}　证据等级分布**")
-    L.append("")
-    L += level_table(evidence["levels"])
+    L.append(f"潜在纳入记录 {prisma['eligible_pending_fulltext']} 条。"
+             f"其中 {len(corpus)} 篇构成本综述的引证样本"
+             f"（按研究设计优先、兼顾各主题覆盖度抽取）；每篇的暂定证据等级"
+             f"仅在特征表与附录 C 中逐条标注，不另做汇总分布——摘要级分级"
+             f"是暂定推断，汇总成表易被误读为已完成的证据评价。")
     L.append("")
     L.append(f"**表 {T_CHARACTERISTICS}　纳入研究基本特征**")
     L.append("")
@@ -716,18 +706,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
                     "指出样本量与单中心比例方面的观察"],
                    "300–450 字", [corpus[1]["pmid"], corpus[2]["pmid"]] if len(corpus) > 2 else []))
     L.append("")
-    L.append("### 3.3 偏倚风险")
-    L.append("")
-    L.append(f"**表 {T_PROBAST}　PROBAST 偏倚风险评价（节选）**")
-    L.append("")
-    L += probast_shell(corpus, mapping)
-    L.append("")
-    L.append(block("results-rob-narrative",
-                   ["说明题录层面无法完成偏倚评估的原因",
-                    "给出已可识别的系统性风险信号（如外部验证比例低）"],
-                   "250–400 字", []))
-    L.append("")
-    L.append("### 3.4 单项研究结果")
+    L.append("### 3.3 单项研究结果")
     L.append("")
     L.append(f"**表 {T_NUMBERS}　定量信号汇总（由题录自动抽取，需全文核对）**")
     L.append("")
@@ -742,7 +721,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
                     "指出性能报告的完整性与置信区间缺失情况"],
                    "400–600 字", []))
     L.append("")
-    L.append("### 3.5 证据综合")
+    L.append("### 3.4 证据综合")
     L.append("")
     L.append(f"**表 {T_CONVERGENCE}　主题证据收敛汇总**")
     L.append("")
@@ -772,14 +751,14 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
                     "不要重复各主题已写过的内容"],
                    "400–600 字", []))
     L.append("")
-    L.append("### 3.6 报告偏倚")
+    L.append("### 3.5 报告偏倚")
     L.append("")
     L.append(block("results-reporting-bias",
                    ["定性讨论性能指标分布所暗示的发表偏倚可能",
                     "说明未做漏斗图检验的原因"],
                    "150–250 字", []))
     L.append("")
-    L.append("### 3.7 证据确定性")
+    L.append("### 3.6 证据确定性")
     L.append("")
     L.append(f"**表 {T_GRADE}　GRADE 证据确定性概要**")
     L.append("")
@@ -836,7 +815,8 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
              "可能存在漏检。")
     L.append("3. **未做效应量合并**：因人群、模态、终点与建模路径异质性较高，"
              "仅作叙述综合与结构化汇总。")
-    L.append("4. **偏倚风险与确定性未评定**：PROBAST 与 GRADE 表为待评估占位，"
+    L.append("4. **偏倚风险与确定性未评定**：题录阶段不产出偏倚风险结果，PROBAST 逐条评估"
+             "统一留待全文复核（模板见附录 D）；GRADE 概要表为待评估占位，"
              "不得用推断值填充。")
     L.append("5. **主题分桶可交叉归类**：同一研究可归入多个主题，故占比之和大于 100%，"
              "不可相加。")

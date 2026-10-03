@@ -31,7 +31,7 @@ from datetime import datetime
 
 import pandas as pd
 
-SCHEMA = "pubmed-deck/1"
+SCHEMA = "pubmed-deck/2"
 
 # ---------------------------------------------------------------------------
 # Topic buckets.
@@ -52,6 +52,61 @@ DEFAULT_TOPICS = {
     "治疗与免疫": r"immunotherap|chemotherap|targeted therap|radiotherapy|immune|tumor microenvironment|adjuvant",
     "多中心与外部验证": r"multicent|multi-cent|external validation|generalizab|prospective|real-world",
     "流行病学与人群研究": r"epidemiolog|public health|incidence|prevalence|population-based|cohort study",
+}
+
+# ---------------------------------------------------------------------------
+# Analytical dimensions (M21-M24). Same bucketing machinery as DEFAULT_TOPICS:
+# title+abstract regex hits, multi-assign, core-bucket (>= CORE_BUCKET_SHARE)
+# demoted to footnote. Each dimension answers one analytical question the deck
+# must be able to show instead of a list of representative papers:
+#   questions  -> which clinical questions does this corpus answer?
+#   modalities -> which data modalities does it run on?
+#   pipelines  -> which modelling routes does it take?
+#   eval_methods -> which evaluation methods does it report, and how often?
+# All four are default heuristics; override any subset via --patterns-file.
+# ---------------------------------------------------------------------------
+DEFAULT_QUESTIONS = {
+    "预后与生存": r"prognos|survival|recurrence|disease.free|progression.free|hazard ratio",
+    "诊断与鉴别": r"\bdiagnos|differentiat|differential",
+    "治疗应答与疗效": r"(?:treatment|therapeutic) response|responder|non.?responder|efficacy|immunotherap|chemotherap|neoadjuvant|adjuvant",
+    "风险分层与列线图": r"nomogram|risk stratif|risk score|risk classification",
+    "筛查与早期检出": r"screening|early detection|early diagnosis|surveillance",
+}
+
+DEFAULT_MODALITIES = {
+    "CT": r"\bct\b|computed tomograph|cone.?beam|\bcbct\b|dual.?energy",
+    "MRI": r"\bmri\b|magnetic resonance|\bdwi\b|\bdce\b|\bmra\b|t[12] weighted",
+    "超声": r"ultrasound|ultrason|sonograph",
+    "PET / SPECT": r"\bpet\b|\bspect\b|positron emission|single.?photon",
+    "内镜": r"endoscop|\beus\b|colonosc|gastroscop|bronchosc",
+    "病理 / 组织学": r"patholog|histolog|whole.?slide|\bwsi\b|cytolog|microscop|immunohistochem",
+    "多模态 / 多参数": r"multimodal|multi.?modal|multiparametric|multi.?parametric|\bmpmri\b|multisequence",
+}
+
+DEFAULT_PIPELINES = {
+    "影像组学（手工特征）": r"radiomic|hand.?crafted|texture feature",
+    "深度学习端到端": r"deep learning|convolutional|\bcnn\b|\bu-net\b|transformer|neural network|resnet|vgg|densenet|efficientnet|\byolo\b",
+    "机器学习模型": r"machine learning|random forest|xgboost|\bsvm\b|lasso|elastic net|gradient boosting|logistic regression|\blda\b|naive bayes",
+    "混合与临床融合": r"\bhybrid|combined model|clinical (?:feature|variable|predictor)|radiomic.{0,60}(?:deep learning|\bcnn\b)|(?:deep learning|\bcnn\b).{0,60}radiomic",
+    "迁移学习与基础模型": r"transfer learning|pre.?traine?d?|foundation model|self.?supervis",
+}
+
+DEFAULT_EVAL_METHODS = {
+    "AUC / C-index": r"\bauc\b|c.?index|concordance|roc (?:curve|analysis)",
+    "HR / 生存分析": r"hazard ratio|\bhr\b|\bcox\b|kaplan.?meier|log.?rank",
+    "敏感度 / 特异度": r"specificity|sensitivity(?!\s+analysis)",
+    "校准": r"calibrat|\bbrier\b",
+    "决策曲线（DCA）": r"decision curve|\bdca\b|net benefit",
+    "DeLong 检验": r"delong|de long",
+    "交叉验证": r"cross.?validation|k.?fold|leave.?one.?out|\bloocv\b",
+    "Bootstrap 重抽样": r"bootstrap",
+}
+
+ANALYSIS_PATTERNS = {
+    "questions": DEFAULT_QUESTIONS,
+    "modalities": DEFAULT_MODALITIES,
+    "pipelines": DEFAULT_PIPELINES,
+    "eval_methods": DEFAULT_EVAL_METHODS,
 }
 
 REVIEW_PAT = r"systematic review|meta-analys|scoping review|umbrella review|guideline|consensus"
@@ -81,6 +136,31 @@ def load_topics(path: str | None) -> dict[str, str]:
     if not isinstance(data, dict) or not data:
         raise SystemExit("--topics-file must be a non-empty JSON object of {name: regex}")
     return {str(k): str(v) for k, v in data.items()}
+
+
+def load_analysis_patterns(path: str | None) -> dict[str, dict[str, str]]:
+    """Load the four analytical pattern sets, overriding any subset.
+
+    Accepted file shape: {"questions": {...}, "modalities": {...},
+    "pipelines": {...}, "eval_methods": {...}} — a missing key falls back to
+    the built-in defaults, so a file tuning only the clinical questions is
+    legal. Same {name: regex} shape as --topics-file, same \\b safety rule.
+    """
+    merged = {k: dict(v) for k, v in ANALYSIS_PATTERNS.items()}
+    if not path:
+        return merged
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise SystemExit("--patterns-file must be a JSON object of {dimension: {name: regex}}")
+    for dim, pats in data.items():
+        if dim not in merged:
+            raise SystemExit(f"--patterns-file: unknown dimension '{dim}' "
+                             f"(expected one of {sorted(merged)})")
+        if not isinstance(pats, dict) or not pats:
+            raise SystemExit(f"--patterns-file: '{dim}' must be a non-empty object")
+        merged[dim] = {str(k): str(v) for k, v in pats.items()}
+    return merged
 
 
 def pick_year(raw) -> int | None:
@@ -275,6 +355,11 @@ def build_content(args) -> dict:
 
     patterns = load_topics(args.topics_file)
     topics = bucket_topics(records, patterns)
+    analysis = load_analysis_patterns(getattr(args, "patterns_file", None))
+    questions = bucket_topics(records, analysis["questions"])
+    modalities = bucket_topics(records, analysis["modalities"])
+    pipelines = bucket_topics(records, analysis["pipelines"])
+    eval_methods = bucket_topics(records, analysis["eval_methods"])
 
     journal_counter = Counter(r["journal"] for r in records)
     total = len(records)
@@ -297,6 +382,11 @@ def build_content(args) -> dict:
         "bucketing": (
             "主题分桶由标题与摘要的关键词命中生成，同一文献可归属多个主题，"
             "各桶占比之和大于 100%，不构成互斥分类。"
+        ),
+        "analysis_bucketing": (
+            "分析维度（临床问题 / 数据模态 / 技术路线 / 评价方法）同样由标题与摘要"
+            "的正则命中生成，可多重归类，各桶占比之和大于 100%；"
+            "覆盖 ≥80% 的桶属检索式核心词的固有命中，不进入分布图。"
         ),
         "source": f"数据来源：PubMed（NCBI E-utilities），检索日期 {args.search_date}。",
     }
@@ -323,6 +413,10 @@ def build_content(args) -> dict:
         "journals": journals,
         "years": years,
         "topics": topics,
+        "questions": questions,
+        "modalities": modalities,
+        "pipelines": pipelines,
+        "eval_methods": eval_methods,
         "articles": articles,
         "notes": notes,
     }
@@ -382,7 +476,8 @@ def review_digest(rv: dict) -> dict:
 FALLBACK_SEQ = [
     ("M01", "封面"), ("M03", "目录"), ("M04", "检索策略"), ("M05", "文献体量"),
     ("M06", "来源期刊"), ("M07", "时间趋势"), ("M08", "主题分布"),
-    ("M09", "代表文献 1"), ("M10", "方向对照"), ("M11", "趋势与局限"),
+    ("M21", "临床问题图谱"), ("M22", "数据模态"), ("M23", "技术路线"),
+    ("M24", "评价方法"), ("M10", "方向对照"), ("M11", "趋势与局限"),
     ("M12", "结论"),
 ]
 
@@ -404,11 +499,6 @@ def page_sequence(c: dict) -> list[tuple[str, str]]:
     return seq or list(FALLBACK_SEQ)
 
 
-def _article_chunks(c: dict) -> list[list[dict]]:
-    arts = c["articles"][:8]
-    return [arts[i:i + 4] for i in range(0, len(arts), 4)] or [[]]
-
-
 def _ol_cover(c, title, nth, ctx) -> list[str]:
     m = c["meta"]
     return [
@@ -419,9 +509,10 @@ def _ol_cover(c, title, nth, ctx) -> list[str]:
 
 def _ol_agenda(c, title, nth, ctx) -> list[str]:
     return [
-        "- 01 检索策略 / 02 文献体量 / 03 来源期刊",
-        "- 04 时间趋势 / 05 主题分布 / 06 代表文献",
-        "- 07 研究问题与 PRISMA / 08 证据等级与收敛 / 09 研究空白",
+        "- 01 检索策略 / 02 文献体量 / 03 主题分布",
+        "- 04 临床问题 / 05 数据与路线 / 06 证据综合",
+        "- 时间趋势并入「文献体量」叙述；综述层页面（研究问题、PRISMA、"
+        "证据等级、收敛、空白、定量性能、核心发现、综述结论）按叙事位置插入",
     ]
 
 
@@ -461,11 +552,31 @@ def _ol_topics(c, title, nth, ctx) -> list[str]:
     return out
 
 
-def _ol_cards(c, title, nth, ctx) -> list[str]:
-    chunks = _article_chunks(c)
-    chunk = chunks[min(nth - 1, len(chunks) - 1)]
-    return [f"- PMID {a['pmid']}｜{a['journal']}（{a['year'] or 'n.d.'}）｜{a['title']}"
-            f"｜入选理由：{a['reason']}" for a in chunk] or ["- （无代表文献）"]
+def _ol_bucket(items: list[dict], notes: dict) -> list[str]:
+    """Shared outline body for M21-M24 (questions/modalities/pipelines/eval)."""
+    out = []
+    for t in items:
+        tag = "（核心词桶：覆盖 ≥80%，不进入分布图）" if t.get("scope") == "core" else ""
+        out.append(f"- {t['key']} — {t['count']} 篇（{t['share']}%）{tag}")
+    out.append(f"- 口径：{notes['analysis_bucketing']}")
+    out.append("- 绘图要求：分布图只呈现非核心词桶，每页条目不超过 9 条。")
+    return out
+
+
+def _ol_questions(c, title, nth, ctx) -> list[str]:
+    return _ol_bucket(c.get("questions") or [], c["notes"])
+
+
+def _ol_modalities(c, title, nth, ctx) -> list[str]:
+    return _ol_bucket(c.get("modalities") or [], c["notes"])
+
+
+def _ol_pipeline(c, title, nth, ctx) -> list[str]:
+    return _ol_bucket(c.get("pipelines") or [], c["notes"])
+
+
+def _ol_eval(c, title, nth, ctx) -> list[str]:
+    return _ol_bucket(c.get("eval_methods") or [], c["notes"])
 
 
 def _ol_duo(c, title, nth, ctx) -> list[str]:
@@ -605,11 +716,13 @@ def _ol_review_conclusion(c, title, nth, ctx) -> list[str]:
 
 OUTLINE_BLOCKS = {
     "M01": _ol_cover, "M03": _ol_agenda, "M04": _ol_method, "M05": _ol_kpi,
-    "M06": _ol_journals, "M07": _ol_trend, "M08": _ol_topics, "M09": _ol_cards,
+    "M06": _ol_journals, "M07": _ol_trend, "M08": _ol_topics,
     "M10": _ol_duo, "M11": _ol_outlook, "M12": _ol_closing,
     "M13": _ol_picos, "M14": _ol_prisma, "M15": _ol_levels,
     "M16": _ol_convergence, "M17": _ol_gaps, "M18": _ol_review_conclusion,
     "M19": _ol_quant, "M20": _ol_findings,
+    "M21": _ol_questions, "M22": _ol_modalities, "M23": _ol_pipeline,
+    "M24": _ol_eval,
 }
 
 LAYER = {
@@ -685,6 +798,10 @@ def main() -> None:
     ap.add_argument("--max-results", default=2000, type=int, help="Requested result ceiling")
     ap.add_argument("--max-articles", default=8, type=int, help="Max representative articles")
     ap.add_argument("--topics-file", default=None, help="JSON {name: regex} overriding default buckets")
+    ap.add_argument("--patterns-file", default=None,
+                    help="JSON {questions|modalities|pipelines|eval_methods: {name: regex}} "
+                         "overriding any subset of the analytical-dimension buckets (M21-M24). "
+                         "Missing keys fall back to the built-in defaults")
     ap.add_argument("--review", default=None,
                     help="Path to review_evidence.json. Embeds the systematic-review layer into "
                          "deck_content.json and deck_outline.md so the deck -- and the PPT built "

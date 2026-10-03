@@ -631,6 +631,12 @@ def summarize_numbers(records: list[dict]) -> dict:
             "max": round(xs[-1], 3),
         }
 
+    cs = stat(ns)
+    if cs:
+        # 近似合计：各研究抽取的最大样本数直接相加。多臂 / 共用队列的研究
+        # 可能重复计入，仅供量级参考，deck 展示时必须带上这一口径。
+        cs["sum"] = int(sum(ns))
+
     return {
         "abstracts_reporting_auc": auc_reported,
         "auc_overall": stat(all_auc),
@@ -638,7 +644,7 @@ def summarize_numbers(records: list[dict]) -> dict:
         "auc_validation": stat(val_auc),
         "auc_external": stat(ext_auc),
         "hazard_ratio": stat(hrs),
-        "cohort_size": stat(ns),
+        "cohort_size": cs,
         "external_validation_n": sum(1 for r in records if r["numbers"]["external_validation"]),
         "prospective_n": sum(1 for r in records if r["numbers"]["prospective"]),
     }

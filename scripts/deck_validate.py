@@ -19,9 +19,10 @@ import sys
 
 SCHEMA_LAYOUTS = {
     "M01", "M02", "M03", "M04", "M05", "M06",
-    "M07", "M08", "M09", "M10", "M11", "M12",
+    "M07", "M08", "M10", "M11", "M12",
     "M13", "M14", "M15", "M16", "M17", "M18",
     "M19", "M20",
+    "M21", "M22", "M23", "M24",
 }
 DARK_LAYOUTS = {"M01", "M12"}
 
@@ -51,9 +52,9 @@ BAD_WEIGHTS = {"600", "700", "800", "900"}
 ALERT_HEX = "B01E28"
 
 # The review layer is all-or-nothing: a deck that shows a research question but
-# no PROBAST-aware level distribution reads as if the question were answered.
-# M13/M14/M18 are the three pages deck_build emits unconditionally whenever a
-# review layer is present, so they are the ones worth requiring.
+# no screening flow and no conclusion reads as if the question were already
+# answered. M13/M14/M18 are the three pages deck_build emits unconditionally
+# whenever a review layer is present, so they are the ones worth requiring.
 REVIEW_CORE_LAYOUTS = ("M13", "M14", "M18")
 # Must match deck_build.PICOS_MISSING: the marker the renderer writes when the
 # review's PICOS never arrived, which silently reverted the PICOS page to a
@@ -161,10 +162,10 @@ def check_structure(doc: str, rep: Report) -> int:
             if pm and int(pm.group(1)) != idx:
                 rep.add("p1", f"F09 页码 {pm.group(1)} 与页序 {idx:02d} 不一致（{where}）")
 
-        if layout == "M09":
-            cards = len(re.findall(r'class="[^"]*\bcard\b', block))
-            if cards > 4:
-                rep.add("p1", f"F11 文献卡片 {cards} 张，单页上限 4 张（{where}）")
+        if layout in ("M21", "M22", "M23", "M24"):
+            rows = len(re.findall(r'class="[^"]*\bbar-row\b', block))
+            if rows > 9:
+                rep.add("p2", f"F11 分析页 {layout} 条目 {rows} 条，超过 9 条易溢出（{where}）")
 
     layouts = []
     for block in slides:

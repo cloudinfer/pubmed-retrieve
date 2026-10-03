@@ -1,7 +1,7 @@
 """
 Phase 6 renderer: deck_content.json -> single-file HTML deck.
 
-Layouts M01-M12 and every styling rule live in:
+Layouts M01-M24 and every styling rule live in:
     references/deck-layouts.md   (structure + data slot contracts)
     references/deck-theme.md     (palette, type scale, grid, forbidden list)
 
@@ -126,11 +126,11 @@ def build_cover(c: dict, page_no: int) -> str:
 # ---------------------------------------------------------------------------
 AGENDA = [
     ("01", "检索策略", "检索式构成、时间窗口与入库日期（EDAT）口径"),
-    ("02", "文献体量", "命中规模、年份跨度、期刊与主题数量"),
-    ("03", "来源期刊", "Top 10 期刊分布与集中度判断"),
-    ("04", "时间趋势", "逐年入库量变化与峰值年份"),
-    ("05", "主题分布", "关键词分桶结果与重叠口径说明"),
-    ("06", "代表文献", "按方法学强度与时效性筛选的代表性研究"),
+    ("02", "文献体量", "命中规模、年份跨度与来源期刊分布"),
+    ("03", "主题分布", "关键词分桶结果与重叠口径说明"),
+    ("04", "临床问题", "文献池回答的临床问题图谱与主导方向"),
+    ("05", "数据与路线", "数据模态、建模技术路线与评价方法报告率"),
+    ("06", "证据综合", "时间趋势、收敛汇总、研究空白与综述结论"),
 ]
 
 
@@ -449,29 +449,125 @@ def build_topics(c: dict, page_no: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# M09 Literature Cards
+# M21-M24 · Analytical dimension pages
+#
+# These four pages replace the old M09 "representative papers" cards: instead
+# of listing a handful of titles, the deck shows what the corpus actually
+# answers (clinical questions), runs on (modalities), builds with (pipelines)
+# and measures with (evaluation methods). Every number comes from
+# deck_content.json regex bucketing over title+abstract; every note below is
+# recomputed from the buckets, never a string literal, so the pages survive a
+# change of topic.
 # ---------------------------------------------------------------------------
-def build_cards(c: dict, items: list[dict], page_no: int, part: int, parts: int) -> str:
-    cards = []
-    for a in items:
-        meta = f'{a["journal"]} · {a["year"] or "n.d."}'
-        cards.append(
-            '<div class="card">'
-            f'<div class="meta">{esc(meta)}</div>'
-            f'<div class="ttl">{esc(a["title"])}</div>'
-            '<div class="foot2">'
-            f'<span class="pmid">PMID {esc(a["pmid"])}</span>'
-            f'<span class="why">{esc(a["reason"])}</span>'
-            "</div></div>"
+BUCKET_LAYOUTS = {
+    "questions": ("M21", "临床问题图谱"),
+    "modalities": ("M22", "数据模态"),
+    "pipelines": ("M23", "技术路线"),
+    "eval_methods": ("M24", "评价方法"),
+}
+
+
+def _bucket_notes(c: dict, dim: str, items: list[dict]) -> list[tuple[str, str]]:
+    """Analytical notes recomputed from the buckets. All data-derived."""
+    notes: list[tuple[str, str]] = []
+    total = c["meta"]["hit_count"] or 1
+    by_key = {t["key"]: t for t in items}
+
+    if dim == "questions":
+        lead = items[0] if items else None
+        if lead:
+            notes.append(("主导临床问题",
+                          f"「{lead['key']}」以 {lead['count']} 篇（{lead['share']}%）居首，"
+                          "是该文献池最集中的研究问题。"))
+        valued = [t for t in items if t.get("validation_count")]
+        if valued:
+            best = max(valued, key=lambda t: t["validation_count"])
+            notes.append(("验证覆盖",
+                          f"外部验证或多中心研究最多的是「{best['key']}」"
+                          f"（{best['validation_count']} 篇），可优先作为全文精读方向。"))
+    elif dim == "modalities":
+        lead = items[0] if items else None
+        if lead:
+            notes.append(("主导模态",
+                          f"「{lead['key']}」以 {lead['count']} 篇（{lead['share']}%）居首。"))
+        mm = by_key.get("多模态 / 多参数")
+        if mm and mm.get("scope") != "core":
+            notes.append(("多模态研究",
+                          f"多模态 / 多参数研究 {mm['count']} 篇（{mm['share']}%），"
+                          + ("已成规模，单一模态结论的外推需谨慎。"
+                             if mm["share"] >= 10 else
+                             "尚未形成规模，跨模态泛化仍是空白。")))
+    elif dim == "pipelines":
+        dl = by_key.get("深度学习端到端")
+        ra = by_key.get("影像组学（手工特征）")
+        if dl and ra:
+            if abs(dl["count"] - ra["count"]) <= max(dl["count"], ra["count"]) * 0.2:
+                rel = "两条路线规模相当，呈并存格局"
+            elif dl["count"] > ra["count"]:
+                rel = "端到端深度学习规模已超过手工特征管线"
+            else:
+                rel = "手工特征管线仍是主流入口"
+            notes.append(("路线格局",
+                          f"深度学习端到端 {dl['count']} 篇、影像组学手工特征 {ra['count']} 篇，"
+                          f"{rel}。"))
+        tl = by_key.get("迁移学习与基础模型")
+        if tl and tl.get("scope") != "core":
+            notes.append(("前沿渗透",
+                          f"迁移学习 / 预训练 / 基础模型 {tl['count']} 篇（{tl['share']}%），"
+                          + ("已进入该领域的常规工具箱。" if tl["share"] >= 15 else
+                             "渗透率仍低，多停留在试点。")))
+    elif dim == "eval_methods":
+        lead = items[0] if items else None
+        if lead:
+            notes.append(("主导指标",
+                          f"报告率最高的是{lead['key']}（{lead['count']} 篇，"
+                          f"{lead['share']}%）。"))
+        thin = [t for t in items if t["share"] < 20 and t["key"] in
+                ("校准", "决策曲线（DCA）", "DeLong 检验")]
+        if thin:
+            names = "、".join(t["key"] for t in thin)
+            notes.append(("方法学缺口",
+                          f"{names}的报告率不足两成，临床可用性评价存在结构性缺口。"))
+    core = [t for t in (c.get(dim) or []) if t.get("scope") == "core"]
+    if core:
+        names = "、".join(t["key"] for t in core)
+        notes.append(("口径提示",
+                      f"{names} 覆盖全量 80% 以上，属检索式核心词的固有命中，"
+                      "不构成分布信号，已从左图剔除。"))
+    return notes
+
+
+def build_bucket_page(c: dict, dim: str, page_no: int) -> str:
+    layout, title = BUCKET_LAYOUTS[dim]
+    items = [t for t in (c.get(dim) or []) if t.get("scope") != "core"][:9]
+    mx = max((t["count"] for t in items), default=1) or 1
+    rows = []
+    for i, t in enumerate(items):
+        color = ANCHOR if i == 0 else (ANCHOR2 if i < 3 else ANCHOR3)
+        rows.append(
+            '<div class="bar-row">'
+            f'<span class="name">{esc(t["key"])}</span>'
+            f'<span class="track"><i style="width:{pct(t["count"], mx):.2f}%;'
+            f'background:{color}"></i></span>'
+            f'<span class="val t-num">{t["count"]} 篇 · {t["share"]}%</span>'
+            "</div>"
         )
-    label = f"代表文献（{part}/{parts}）"
-    body = f'<div class="cards" style="grid-column:{FULL}">{"".join(cards)}</div>'
+    note_html = "".join(
+        f'<div style="margin-bottom:20px">'
+        f'<div class="eyebrow">{esc(t)}</div>'
+        f'<p class="t-bodys" style="margin-top:10px">{esc(d)}</p></div>'
+        for t, d in _bucket_notes(c, dim, c.get(dim) or [])
+    )
+    body = (
+        f'<div style="grid-column:{FULL};display:grid;'
+        'grid-template-columns:11fr 5fr;column-gap:24px;align-items:start">'
+        f'<div>{"".join(rows)}</div><div>{note_html}</div></div>'
+    )
     body += (
         f'<p class="t-cap" style="grid-column:{FULL}">'
-        "PMID 均经检索结果 CSV 回查校验；入选理由按方法学强度与时效性排序，"
-        "不代表研究质量评价。</p>"
+        f'{esc(c["notes"]["analysis_bucketing"])}</p>'
     )
-    return page(layout="M09", label=label, title=f"代表文献 {part}", body=body,
+    return page(layout=layout, label=title, title=title, body=body,
                 page=page_no, meta=c["meta"])
 
 
@@ -558,7 +654,7 @@ def build_outlook(c: dict, page_no: int) -> str:
         ("03", "下一步",
          "补检同义词与 MeSH 副主题词以降低漏检；"
          "扩展或收窄时间窗口复核趋势拐点；"
-         "对代表文献做全文精读并提取证据表；"
+         "对潜在纳入研究做全文精读并提取证据表；"
          "必要时引入外部数据集验证结论稳健性。"),
     ]
     cells = "".join(
@@ -593,7 +689,7 @@ def build_closing(c: dict, page_no: int) -> str:
         f'<h1 class="t-h1" style="grid-column:1/15">{esc(headline)}。</h1>'
         '<p class="t-body" style="grid-column:1/13;margin-top:32px;color:var(--ink-2)">'
         "下一步：补检同义词与 MeSH 词、复核时间窗口口径、"
-        "对代表文献做全文精读并形成证据表。</p>"
+        "对潜在纳入研究做全文精读并形成证据表。</p>"
         "</div>\n"
         '<div class="rule"></div>\n'
         '<div class="foot t-cap">'
@@ -870,6 +966,13 @@ def build_quant(c: dict, rv: dict, page_no: int) -> str:
     ext = n.get("external_validation_n", 0)
     pro = n.get("prospective_n", 0)
     pool = rv.get("prisma", {}).get("eligible_pending_fulltext", 0) or 1
+    cs = n.get("cohort_size") or {}
+    scale_note = ""
+    if cs.get("sum"):
+        scale_note = (
+            f"数据规模：报告样本量的 {cs.get('n', 0)} 篇研究合计 {cs['sum']} 例"
+            "（各研究抽取的最大样本数直接相加，共用队列可能重复计入，仅供量级参考）。"
+        )
     notes = (
         f'<div style="grid-column:9/17;margin-top:24px">'
         f'<div class="eyebrow">两项系统性落差</div>'
@@ -892,13 +995,13 @@ def build_quant(c: dict, rv: dict, page_no: int) -> str:
         f'</div>'
     )
     body = (
-        f'<h2 class="t-h2" style="grid-column:{FULL}">定量性能汇总</h2>'
+        f'<h2 class="t-h2" style="grid-column:{FULL}">数据规模与定量性能</h2>'
         f'<div style="grid-column:1/9;margin-top:24px">{"".join(rows)}</div>'
         + notes +
         f'<p class="t-cap" style="grid-column:{FULL};margin-top:16px">'
-        f'数值为「报告值」的分布，非合并效应量；多数摘要未报告置信区间。</p>'
+        f'数值为「报告值」的分布，非合并效应量；多数摘要未报告置信区间。{scale_note}</p>'
     )
-    return page(layout="M19", label="定量性能", title="定量性能汇总",
+    return page(layout="M19", label="规模与性能", title="数据规模与定量性能",
                 body=body, page=page_no, meta=c["meta"])
 
 
@@ -1046,11 +1149,13 @@ def compose(c: dict, rv: dict | None = None) -> list[str]:
     if c["topics"]:
         pages.append(build_topics(c, n()))
 
-    arts = c["articles"][:8]
-    if arts:
-        chunks = [arts[i:i + 4] for i in range(0, len(arts), 4)]
-        for idx, chunk in enumerate(chunks, start=1):
-            pages.append(build_cards(c, chunk, n(), idx, len(chunks)))
+    # M21-M24: analytical dimensions (computed by deck_content.py). Each page
+    # renders only when at least one informative (non-core) bucket exists; a
+    # corpus whose every bucket is a core-concept echo has nothing to show.
+    for dim in ("questions", "modalities", "pipelines", "eval_methods"):
+        informative = [t for t in (c.get(dim) or []) if t.get("scope") != "core"]
+        if informative:
+            pages.append(build_bucket_page(c, dim, n()))
 
     if len(duo_topics(c)) >= 2:
         pages.append(build_duo(c, n()))
