@@ -115,42 +115,31 @@ LEVEL_LABEL = {
 
 # ---------------------------------------------------------------------------
 # Eligibility screening (PRISMA). Applied to title + abstract only.
+# Every disease-specific pattern lives in --criteria-file (required); nothing
+# about any particular topic is hard-coded here. IDX_IN / OUT_IN below are
+# topic-NEUTRAL method/outcome signals kept only as seeds for the criteria
+# template -- screening itself reads whatever the criteria file provides.
 # ---------------------------------------------------------------------------
-POP_IN = r"hepatocellular|\bhcc\b|liver (?:cancer|carcinoma|tumor|tumour|neoplasm)|hepatic (?:cancer|carcinoma)|\bhepatoma\b"
-# A record can match POP_IN incidentally: a glioblastoma or colorectal study
-# mentions "liver" because of metastases, and a biliary-tract review mentions
-# "hepatic". Population screening therefore runs in two directions — the HCC
-# signal must be there, and another primary tumour must not own the title.
-# "erythropoietin-producing hepatocellular receptor A2" (EphA2) is a protein
-# name that contains the word "hepatocellular". Without the lookahead, glioma
-# studies get waved through as HCC populations. The same substring trap that
-# the skill already documents for `spect` / `oral` / `us`.
-HCC_STRONG = r"hepatocellular(?!\s+receptor)|\bhcc\b|\bhepatoma\b"
-POP_STRONG = HCC_STRONG  # population-specific "owns the title" pattern
-OTHER_PRIMARY = (
-    r"glioblastoma|glioma|breast cancer|breast tumour|lung cancer|non-small[- ]cell"
-    r"|colorectal|pancreatic|gastric cancer|prostate|cholangiocarcinoma"
-    r"|biliary tract|biliary tumour|biliary tumor|gallbladder|oesophageal|esophageal"
-    r"|melanoma|renal cell|ovarian|cervical|thyroid|bladder cancer|lymphoma|leukemia"
-    r"|leukaemia|sarcoma|nasopharyn|endometrial|head and neck"
-)
 IDX_IN = r"radiomic|radiogenomic|deep learning|machine learning|convolutional|\bcnn\b|artificial intelligence|\bai\b|nomogram|signature|texture analys|image feature"
 OUT_IN = r"prognos|survival|recurrence|relapse|\bpfs\b|\bos\b|hazard ratio|risk stratif|outcome|predict"
 NONRESEARCH = r"^(?:editorial|comment|correction|erratum|retraction|letter|reply|author reply|published erratum)"
 
-# Exclusion reason labels are derived from the active PICOS configuration, so a
-# non-HCC topic does not end up reporting "population mismatch: not HCC".
+# Generic exclusion-reason labels; overridable via the criteria file.
 POP_LABEL = "目标人群"
 OTHER_PRIMARY_LABEL = "非目标原发肿瘤（题名主导）"
 IDX_LABEL = "影像组学或影像人工智能方法"
 OUT_LABEL = "预后/诊断结局"
 
-# Provenance of the active criteria. Everything above describes hepatocellular
-# carcinoma, which is wrong for every other topic and -- crucially -- wrong
-# silently. main() calls guard_criteria() to turn that silence into a failure,
-# and the source is recorded in review_evidence.json so the run is auditable.
-CRITERIA_SOURCE = "builtin-hepatocellular-carcinoma"
-CRITERIA_IS_DEFAULT = True
+# Screening patterns -- set exclusively by load_criteria(). The run aborts in
+# require_criteria() before screening whenever no criteria file was provided,
+# so these placeholders never reach the screen loop as empty strings.
+POP_IN = ""
+POP_STRONG = ""
+OTHER_PRIMARY = ""
+
+# Provenance of the active criteria (basename of --criteria-file), recorded in
+# review_evidence.json so every PRISMA count is auditable and reproducible.
+CRITERIA_SOURCE = ""
 
 BAR = "=" * 78
 
@@ -853,32 +842,34 @@ def load_themes(path: str | None) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()}
 
 
-def load_criteria(path: str | None) -> None:
-    """Override the eligibility criteria (PICOS) from a JSON file.
+REQUIRED_CRITERIA_KEYS = ("pop_in", "idx_in", "out_in")
 
-    Keys (all optional, regex strings): ``pop_in``, ``pop_strong``,
-    ``other_primary``, ``idx_in``, ``out_in``, plus the human-readable labels
-    ``pop_label``, ``other_primary_label``, ``idx_label``, ``out_label``.
-    Defaults reproduce the original hepatocellular-carcinoma criteria -- see
-    :func:`guard_criteria` for why that default is dangerous on other topics.
+
+def load_criteria(path: str) -> None:
+    """Load the eligibility criteria (screening regexes + reason labels).
+
+    ``pop_in`` / ``idx_in`` / ``out_in`` are mandatory; ``pop_strong`` and
+    ``other_primary`` default to empty (their checks are disabled); the four
+    labels are optional. The path is validated by :func:`require_criteria`
+    before this runs, so a missing file never reaches here.
     """
-    global CRITERIA_SOURCE, CRITERIA_IS_DEFAULT
-    if not path:
-        return
     global POP_IN, POP_STRONG, OTHER_PRIMARY, IDX_IN, OUT_IN
     global POP_LABEL, OTHER_PRIMARY_LABEL, IDX_LABEL, OUT_LABEL
+    global CRITERIA_SOURCE
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    if "pop_in" in data:
-        POP_IN = str(data["pop_in"])
-    if "pop_strong" in data:
-        POP_STRONG = str(data["pop_strong"])
-    if "other_primary" in data:
-        OTHER_PRIMARY = str(data["other_primary"])
-    if "idx_in" in data:
-        IDX_IN = str(data["idx_in"])
-    if "out_in" in data:
-        OUT_IN = str(data["out_in"])
+    if not isinstance(data, dict):
+        raise SystemExit(f"--criteria-file must be a JSON object: {path}")
+    missing = [k for k in REQUIRED_CRITERIA_KEYS if not str(data.get(k, "")).strip()]
+    if missing:
+        raise SystemExit(
+            f"--criteria-file 缺少必填键：{', '.join(missing)}"
+            "（各键含义见 references/review-criteria.md，模板 criteria_template.json 已列出全部键）")
+    POP_IN = str(data["pop_in"])
+    POP_STRONG = str(data.get("pop_strong", "") or "")
+    OTHER_PRIMARY = str(data.get("other_primary", "") or "")
+    IDX_IN = str(data["idx_in"])
+    OUT_IN = str(data["out_in"])
     for key, name in (("pop_label", "POP_LABEL"),
                       ("other_primary_label", "OTHER_PRIMARY_LABEL"),
                       ("idx_label", "IDX_LABEL"),
@@ -886,7 +877,6 @@ def load_criteria(path: str | None) -> None:
         if key in data:
             globals()[name] = str(data[key])
     CRITERIA_SOURCE = os.path.basename(path)
-    CRITERIA_IS_DEFAULT = False
 
 
 def write_criteria_template(path: str) -> str:
@@ -910,29 +900,28 @@ def write_criteria_template(path: str) -> str:
     return path
 
 
-def guard_criteria(topic: str, query: str, allow_default: bool, out_dir: str) -> None:
-    """Refuse to screen a non-hepatic topic with the built-in HCC criteria.
+def require_criteria(topic: str, criteria_path: str | None, out_dir: str) -> None:
+    """Refuse to screen without a topic-specific criteria file -- for every topic.
 
-    The built-in ``POP_IN`` / ``OTHER_PRIMARY`` describe hepatocellular
-    carcinoma. Running them against an unrelated topic does not fail -- it
-    quietly excludes almost everything (in the radiomics run this dropped
-    374/395 records and left 14 "eligible"). Silent is the problem, so the
-    guard fails loudly and hands back a criteria skeleton to edit.
+    The script ships **no** built-in screening criteria: the eligibility
+    patterns exist only in ``--criteria-file``. A missing file is therefore a
+    hard stop with an editable skeleton, never a silent default. (Earlier
+    versions hardcoded hepatocellular-carcinoma regexes and only guarded
+    "non-hepatic" topics by keyword sniffing -- which still let hepatic-looking
+    topics run on stale rules. Sniffing is gone; the file is simply required.)
     """
-    if not CRITERIA_IS_DEFAULT or allow_default:
-        return
-    hay = f"{topic}\n{query}".lower()
-    if not hay.strip() or re.search(r"hepat|\bhcc\b|liver|hepatic|肝", hay):
+    if criteria_path:
+        if not os.path.exists(criteria_path):
+            raise SystemExit(f"--criteria-file not found: {criteria_path}")
         return
     os.makedirs(out_dir, exist_ok=True)
     tpl = write_criteria_template(os.path.join(out_dir, "criteria_template.json"))
     sys.stderr.write(
         f"\n{BAR}\n"
-        "[review_evidence] 已中止：正在用内置纳入标准筛选非肝脏主题。\n"
+        "[review_evidence] 已中止：未提供纳入判据文件 --criteria-file。\n"
         "\n"
-        "内置 POP_IN / OTHER_PRIMARY 是针对「肝细胞癌」硬编码的。用于其他主题时\n"
-        "不会报错，只会静默排除几乎全部记录（真实案例：395 条中误排除 374 条，\n"
-        "「潜在纳入」仅剩 14 条）。\n"
+        "脚本不内置任何主题的筛选判据（疾病专属正则只能来自判据文件），\n"
+        "因此对任何主题都会在此中止，而不是带着缺失或错配的判据继续筛。\n"
         "\n"
         f"本次主题：{topic or '（未提供）'}\n"
         f"已生成模板：{tpl}\n"
@@ -940,7 +929,51 @@ def guard_criteria(topic: str, query: str, allow_default: bool, out_dir: str) ->
         "请按主题填写后重跑：\n"
         f"  --criteria-file \"{tpl}\"\n"
         "\n"
-        "确需沿用内置标准（仅肝脏主题适用）时加 --allow-default-criteria。\n"
+        "字段定义、写法规范与完整示例见 references/review-criteria.md。\n"
+        f"{BAR}\n"
+    )
+    sys.exit(2)
+
+
+PICOS_KEYS = ("population", "population_in", "population_out", "index", "comparator",
+              "outcome", "outcome_in", "outcome_out", "study_type", "keywords")
+
+
+def write_picos_template(path: str) -> str:
+    """Drop an editable PICOS skeleton next to the output."""
+    tpl = {k: (f"<按本次主题改写：{k}>" if k != "keywords" else "<主题词1；主题词2；主题词3>")
+           for k in PICOS_KEYS}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(tpl, fh, ensure_ascii=False, indent=2)
+    return path
+
+
+def require_picos(picos_path: str | None, out_dir: str) -> None:
+    """Refuse to build the evidence base without --picos-file (any topic).
+
+    The PICOS wording travels in ``meta.picos`` and is the deck's M13 page's
+    single source of truth; without the file the deck would have to invent a
+    population. Missing file = hard stop with an editable skeleton.
+    """
+    if picos_path:
+        if not os.path.exists(picos_path):
+            raise SystemExit(f"--picos-file not found: {picos_path}")
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    tpl = write_picos_template(os.path.join(out_dir, "picos_template.json"))
+    sys.stderr.write(
+        f"\n{BAR}\n"
+        "[review_evidence] 已中止：未提供 PICOS 措辞文件 --picos-file。\n"
+        "\n"
+        "脚本不内置任何主题的 PICO 措辞；meta.picos 又是 deck M13 页的唯一来源，\n"
+        "缺失它等于让下游自行编造人群描述，因此对任何主题都会在此中止。\n"
+        "\n"
+        f"已生成模板：{tpl}\n"
+        "\n"
+        "请按主题填写后重跑：\n"
+        f"  --picos-file \"{tpl}\"\n"
+        "\n"
+        "字段定义与完整示例见 references/review-criteria.md。\n"
         f"{BAR}\n"
     )
     sys.exit(2)
@@ -960,33 +993,30 @@ def main() -> None:
     ap.add_argument("--per-theme", default=8, type=int, help="Minimum exemplars per theme")
     ap.add_argument("--themes-file", default=None, help="JSON {theme: regex} overriding synthesis themes")
     ap.add_argument("--criteria-file", default=None,
-                    help="JSON overriding PICOS eligibility criteria (pop_in/pop_strong/other_primary/idx_in/out_in + labels)")
+                    help="JSON with the topic-specific eligibility criteria "
+                         "(pop_in/pop_strong/other_primary/idx_in/out_in + labels). "
+                         "REQUIRED -- the script ships no built-in criteria; "
+                         "see references/review-criteria.md")
     ap.add_argument("--picos-file", default=None,
-                    help="JSON overriding the PICOS wording. Not used for screening here -- it is "
+                    help="JSON with the PICOS wording. Not used for screening here -- it is "
                          "recorded into meta.picos so downstream artifacts (in particular the deck's "
-                         "PICOS page) cannot invent their own population")
-    ap.add_argument("--allow-default-criteria", action="store_true",
-                    help="Permit the built-in hepatocellular-carcinoma criteria on a non-hepatic topic (normally refused)")
+                         "PICOS page) cannot invent their own population. REQUIRED.")
     ap.add_argument("--search-date", default=__import__("datetime").date.today().isoformat())
     args = ap.parse_args()
 
+    require_criteria(args.topic, args.criteria_file, args.out_dir)
+    require_picos(args.picos_file, args.out_dir)
     load_criteria(args.criteria_file)
     query = args.query
     if not query and args.query_file and os.path.exists(args.query_file):
         with open(args.query_file, encoding="utf-8") as fh:
             query = fh.read().strip()
-    guard_criteria(args.topic, query, args.allow_default_criteria, args.out_dir)
 
-    picos = None
-    if args.picos_file:
-        if not os.path.exists(args.picos_file):
-            raise SystemExit(f"--picos-file not found: {args.picos_file}")
-        with open(args.picos_file, encoding="utf-8") as fh:
-            picos = json.load(fh)
+    with open(args.picos_file, encoding="utf-8") as fh:
+        picos = json.load(fh)
 
     content = build(args)
     content.setdefault("meta", {})["criteria_source"] = CRITERIA_SOURCE
-    content["meta"]["criteria_is_default"] = CRITERIA_IS_DEFAULT
     # The PICOS wording travels with the evidence base. The deck's M13 page used
     # to hardcode its own (hepatocellular-carcinoma) rows, so a generic topic got
     # a deck that contradicted its own review; recording it here gives the deck a
@@ -1014,8 +1044,7 @@ def main() -> None:
     print(f"[review] identified={p['identified']} dedup={p['duplicates_removed']} "
           f"screened_out={p['excluded_screening_total']} eligible={p['eligible_pending_fulltext']}")
     print(f"[review] corpus={len(content['corpus'])} themes={len(content['themes'])} gaps={len(content['gaps'])}")
-    print(f"[review] criteria={CRITERIA_SOURCE}"
-          + ("  ⚠ 使用内置肝细胞癌标准" if CRITERIA_IS_DEFAULT else ""))
+    print(f"[review] criteria={CRITERIA_SOURCE} picos={os.path.basename(args.picos_file)}")
 
 
 if __name__ == "__main__":

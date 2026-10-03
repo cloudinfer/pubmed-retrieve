@@ -376,56 +376,60 @@ def theme_pmids(corpus: list[dict], theme: str, limit: int = 6) -> list[str]:
 # --------------------------------------------------------------------------- #
 # compose
 # --------------------------------------------------------------------------- #
-DEFAULT_PICOS = {
-    "population": "经病理或临床标准确诊的肝细胞癌患者，不限治疗方式",
-    "population_in": "题名或摘要明确涉及肝细胞癌或肝脏原发肿瘤",
-    "population_out": "原发肿瘤位于肝外；仅提及肝转移；仅出现 \"hepatocellular\" 作为蛋白或受体名称（如 EphA2 全称）",
-    "index": "基于 CT / MRI / 超声 / PET 的影像组学或影像人工智能模型",
-    "comparator": "传统临床病理模型、单一临床指标，或不同建模路径之间的比较",
-    "outcome": "总体生存、无复发生存与早期复发、病理学标志物、治疗应答",
-    "outcome_in": "生存、复发、病理学标志物、治疗应答中的至少一项",
-    "outcome_out": "仅诊断或分期，无预后或应答终点",
-    "study_type": "原始研究（含队列、病例对照）与系统综述 / Meta 分析",
-    "keywords": "肝细胞癌；影像组学；人工智能；预后；系统综述",
-}
-
-# The wording above is hepatocellular-carcinoma-specific. Left in place on an
-# unrelated topic it does not error -- it just prints a manuscript whose PICOS
-# table, inclusion criteria and keywords describe a different disease.
-# guard_picos() refuses that, and PICOS_SOURCE is recorded in the draft footer.
-PICOS_SOURCE = "builtin-hepatocellular-carcinoma"
-PICOS_IS_DEFAULT = True
-LIVER_HINT = r"hepat|\bhcc\b|liver|hepatic|肝"
+# The PICOS wording describes THIS review's population/index/outcome. It can
+# only come from --picos-file: the script ships no topic-specific defaults, so
+# a missing file is a hard stop (require_picos) instead of a manuscript that
+# quietly describes the wrong disease. PICOS_SOURCE is recorded in the footer.
+PICOS_KEYS = ("population", "population_in", "population_out", "index", "comparator",
+              "outcome", "outcome_in", "outcome_out", "study_type", "keywords")
+PICOS_SOURCE = ""
 BAR = "=" * 78
 
 
-def guard_picos(topic: str, picos: dict | None, allow_default: bool, out_dir: str) -> None:
-    """Refuse to draft a non-hepatic review with the built-in HCC PICOS."""
-    if not PICOS_IS_DEFAULT or allow_default:
-        return
-    if re.search(LIVER_HINT, f"{topic}\n{json.dumps(picos or {}, ensure_ascii=False)}".lower()):
-        return
+def require_picos(picos_path: str | None, out_dir: str) -> dict:
+    """Load --picos-file, refusing to draft without it -- for every topic.
+
+    The script carries no built-in PICOS wording: without the file the PICO
+    table, inclusion/exclusion criteria and keywords would have nothing
+    truthful to say about the topic, so the run stops with an editable
+    skeleton instead. (Earlier versions hardcoded a hepatocellular-carcinoma
+    PICOS and only refused "non-hepatic" topics by keyword sniffing; sniffing
+    is gone -- the file is simply required.)
+    """
+    global PICOS_SOURCE
+    if picos_path:
+        if not os.path.exists(picos_path):
+            raise SystemExit(f"--picos-file not found: {picos_path}")
+        with open(picos_path, encoding="utf-8") as fh:
+            picos = json.load(fh)
+        if not isinstance(picos, dict):
+            raise SystemExit(f"--picos-file must be a JSON object: {picos_path}")
+        missing = [k for k in PICOS_KEYS if not str(picos.get(k, "")).strip()]
+        if missing:
+            raise SystemExit(
+                f"--picos-file 缺少必填键：{', '.join(missing)}"
+                "（picos_template.json 已列出全部键，字段含义见 references/review-criteria.md）")
+        PICOS_SOURCE = os.path.basename(picos_path)
+        return picos
     os.makedirs(out_dir, exist_ok=True)
     tpl_path = os.path.join(out_dir, "picos_template.json")
     tpl = {k: (f"<按本次主题改写：{k}>" if k != "keywords" else "<主题词1；主题词2；主题词3>")
-           for k in DEFAULT_PICOS}
+           for k in PICOS_KEYS}
     with open(tpl_path, "w", encoding="utf-8") as fh:
         json.dump(tpl, fh, ensure_ascii=False, indent=2)
     sys.stderr.write(
         f"\n{BAR}\n"
-        "[review_compose] 已中止：正在用内置「肝细胞癌」PICOS 撰写非肝脏主题的综述。\n"
+        "[review_compose] 已中止：未提供 PICOS 措辞文件 --picos-file。\n"
         "\n"
-        "继续执行不会报错，但产出的 PICO 表、纳入标准与关键词会在描述另一种疾病\n"
-        "（真实案例：一篇影像组学综述的骨架里出现「经病理或临床标准确诊的肝细胞癌\n"
-        "患者」与 EphA2 受体，均与检索主题无关）。\n"
+        "脚本不内置任何主题的 PICO 表、纳入排除标准与关键词；没有这份文件，\n"
+        "成文内容无从谈起，因此对任何主题都会在此中止。\n"
         "\n"
-        f"本次主题：{topic or '（未提供）'}\n"
         f"已生成模板：{tpl_path}\n"
         "\n"
-        "请填写后重跑：\n"
+        "请按主题填写后重跑：\n"
         f"  --picos-file \"{tpl_path}\"\n"
         "\n"
-        "确需沿用内置标准（仅肝脏主题适用）时加 --allow-default-picos。\n"
+        "字段定义与完整示例见 references/review-criteria.md。\n"
         f"{BAR}\n"
     )
     sys.exit(2)
@@ -433,9 +437,9 @@ def guard_picos(topic: str, picos: dict | None, allow_default: bool, out_dir: st
 
 def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
             topic: str, regno: str, picos: dict | None = None) -> str:
-    P = dict(DEFAULT_PICOS)
-    if picos:
-        P.update({k: str(v) for k, v in picos.items() if v})
+    if not picos:
+        raise SystemExit("compose() 需要 --picos-file 提供的 PICOS（先经 require_picos 加载校验）")
+    P = {k: str(picos[k]) for k in PICOS_KEYS if picos.get(k)}
     meta = evidence["meta"]
     prisma = evidence["prisma"]
     corpus = evidence["corpus"]
@@ -553,9 +557,7 @@ def compose(evidence: dict, refs: list[str], mapping: dict[str, int],
         L.append("本综述未预先注册方案；检索式、筛选判据与综合方法在提取开始前已由脚本固化，"
                  "未作事后修改。")
     L.append("")
-    L.append(f"纳入判据来源：`{PICOS_SOURCE}`"
-             + ("（⚠ 内置肝细胞癌标准，仅在肝脏主题下适用）" if PICOS_IS_DEFAULT else "")
-             + "。")
+    L.append(f"纳入判据来源：`{PICOS_SOURCE}`。")
     L.append("")
     L.append("### 2.2 纳入与排除标准")
     L.append("")
@@ -930,25 +932,17 @@ def main() -> None:
     ap.add_argument("--topic", default="", help="Override the topic")
     ap.add_argument("--regno", default="", help="PROSPERO registration number")
     ap.add_argument("--picos-file", default=None,
-                    help="JSON overriding PICOS wording (population/index/comparator/outcome/study_type/"
-                         "population_in/population_out/outcome_in/outcome_out/keywords)")
-    ap.add_argument("--allow-default-picos", action="store_true",
-                    help="Permit the built-in hepatocellular-carcinoma PICOS on a non-hepatic topic (normally refused)")
+                    help="JSON with the PICOS wording (population/index/comparator/outcome/study_type/"
+                         "population_in/population_out/outcome_in/outcome_out/keywords). "
+                         "REQUIRED -- the script ships no built-in wording")
     args = ap.parse_args()
 
-    global PICOS_SOURCE, PICOS_IS_DEFAULT
-    picos = None
-    if args.picos_file:
-        with open(args.picos_file, "r", encoding="utf-8") as fh:
-            picos = json.load(fh)
-        PICOS_SOURCE = os.path.basename(args.picos_file)
-        PICOS_IS_DEFAULT = False
+    picos = require_picos(args.picos_file, args.out_dir)
 
     with open(args.evidence, "r", encoding="utf-8") as fh:
         evidence = json.load(fh)
 
     topic = args.topic or evidence["meta"]["topic"]
-    guard_picos(topic, picos, args.allow_default_picos, args.out_dir)
     pmids = [r["pmid"] for r in evidence["corpus"]]
     refs, mapping = build_references(args.csv, pmids)
 
@@ -972,8 +966,7 @@ def main() -> None:
     print(f"[review] references  -> {refs_path}  ({len(refs)} entries)")
     print(f"[review] refmap      -> {map_path}")
     print(f"[review] write blocks: {blocks}  (must reach 0 before submission)")
-    print(f"[review] picos       <- {PICOS_SOURCE}"
-          + ("  ⚠ 使用内置肝细胞癌标准" if PICOS_IS_DEFAULT else ""))
+    print(f"[review] picos       <- {PICOS_SOURCE}")
 
 
 if __name__ == "__main__":

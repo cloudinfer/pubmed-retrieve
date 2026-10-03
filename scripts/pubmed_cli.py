@@ -144,12 +144,11 @@ def build_deck_outputs(args, query, end_date, review_path=None):
 
 
 def preflight_review(args, query, end_date):
-    """Load topic-specific review criteria/PICOS and refuse a topic mismatch.
+    """Validate --criteria-file / --picos-file before the first network call.
 
-    Deliberately runs **before** the first network call. The guard rejects a
-    non-hepatic topic that is still using the built-in hepatocellular-carcinoma
-    defaults; checking it after retrieval would mean a rejected run had already
-    overwritten the caller's CSV and deck content model. Fail first, fail cheap.
+    Both files are mandatory for every topic (the review scripts ship no
+    built-in criteria), and both are validated here so a rejected run never
+    overwrites the caller's CSV or deck content model. Fail first, fail cheap.
     """
     out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
     os.makedirs(out_dir, exist_ok=True)
@@ -162,13 +161,9 @@ def preflight_review(args, query, end_date):
         print(f"[preflight] review_evidence unavailable ({exc}); review stages will be skipped")
         return
 
-    re_mod.load_criteria(getattr(args, "criteria_file", None))
-    re_mod.guard_criteria(topic, query, getattr(args, "allow_default_criteria", False), out_dir)
-
-    picos_path = getattr(args, "picos_file", None)
-    if picos_path:
-        with open(picos_path, encoding="utf-8") as fh:
-            args._picos = json.load(fh)
+    re_mod.require_criteria(topic, getattr(args, "criteria_file", None), out_dir)
+    re_mod.require_picos(getattr(args, "picos_file", None), out_dir)
+    re_mod.load_criteria(args.criteria_file)
 
     try:
         import review_compose as rc_mod
@@ -176,11 +171,7 @@ def preflight_review(args, query, end_date):
         print(f"[preflight] review_compose unavailable ({exc})")
         return
 
-    if picos_path:
-        rc_mod.PICOS_SOURCE = os.path.basename(picos_path)
-        rc_mod.PICOS_IS_DEFAULT = False
-    rc_mod.guard_picos(topic, args._picos,
-                       getattr(args, "allow_default_picos", False), out_dir)
+    args._picos = rc_mod.require_picos(getattr(args, "picos_file", None), out_dir)
 
 
 def build_review_outputs(args, query, end_date):
@@ -202,12 +193,11 @@ def build_review_outputs(args, query, end_date):
     out_dir = args.review_out_dir or (os.path.dirname(os.path.abspath(args.output)) or ".")
     os.makedirs(out_dir, exist_ok=True)
 
-    # Loading is idempotent; *checking* stays in preflight_review() so the rule
-    # has one home. Reloading here keeps this function correct even when it is
-    # called on its own (the criteria are module-level state, and silently
-    # falling back to the hepatocarcinoma defaults is exactly the failure this
-    # whole guard exists to prevent -- it would collapse the corpus to a handful
-    # of records without an error).
+    # Loading is idempotent; *validating* stays in preflight_review() so the
+    # rule has one home. Reloading here keeps this function correct even when
+    # it is called on its own: the patterns are module-level state, and
+    # screening with stale or empty patterns would silently corrupt the
+    # PRISMA counts.
     re.load_criteria(getattr(args, "criteria_file", None))
 
     # Criteria were already validated by preflight_review() before retrieval
@@ -235,7 +225,6 @@ def build_review_outputs(args, query, end_date):
     print("\n=== Building systematic-review evidence base (Phase 5) ===")
     ev = re.build(ns)
     ev.setdefault("meta", {})["criteria_source"] = re.CRITERIA_SOURCE
-    ev["meta"]["criteria_is_default"] = re.CRITERIA_IS_DEFAULT
     # Carry the PICOS wording with the evidence base so the deck's pictos page
     # renders the same population the review screened with, instead of a second
     # copy that can drift (or be wrong for the topic).
@@ -371,25 +360,16 @@ def main():
     )
     parser.add_argument(
         "--criteria-file", default=None,
-        help="JSON overriding the review's PICOS eligibility criteria "
+        help="JSON with the review's eligibility screening criteria "
              "(pop_in/pop_strong/other_primary/idx_in/out_in + labels). "
-             "REQUIRED for any non-hepatic topic -- see references/review-criteria.md"
+             "REQUIRED -- the scripts ship no built-in criteria; "
+             "see references/review-criteria.md"
     )
     parser.add_argument(
         "--picos-file", default=None,
-        help="JSON overriding the review's PICOS wording "
+        help="JSON with the review's PICOS wording "
              "(population/index/comparator/outcome/study_type/…/keywords). "
-             "REQUIRED for any non-hepatic topic"
-    )
-    parser.add_argument(
-        "--allow-default-criteria", action="store_true",
-        help="Permit the built-in hepatocellular-carcinoma screening criteria "
-             "on a non-hepatic topic (normally refused)"
-    )
-    parser.add_argument(
-        "--allow-default-picos", action="store_true",
-        help="Permit the built-in hepatocellular-carcinoma PICOS wording "
-             "on a non-hepatic topic (normally refused)"
+             "REQUIRED -- the scripts ship no built-in wording"
     )
     parser.add_argument(
         "--full", action="store_true",
@@ -414,11 +394,10 @@ def main():
 
     end_date = args.end_date or datetime.now().strftime("%Y/%m/%d")
 
-    # Preflight BEFORE the first network call. The eligibility-criteria guard
-    # rejects a non-hepatic topic that is still using the hepatocarcinoma
-    # defaults; running it after retrieval would mean a rejected run had
-    # already overwritten the caller's CSV and deck content model with data
-    # screened by the wrong rules. Fail first, fail cheap.
+    # Preflight BEFORE the first network call. --criteria-file / --picos-file
+    # are mandatory for every topic (the scripts ship no built-in criteria);
+    # validating here means a rejected run never overwrites the caller's CSV
+    # and deck content model. Fail first, fail cheap.
     if args.review or args.full:
         preflight_review(args, query, end_date)
 

@@ -361,18 +361,13 @@ Phase 6 回答「检索到了什么、结论长什么样」（把本阶段的结
 
 #### 5.1 定制纳入标准 → 构建证据底座
 
-> **Step 0（必做，不可跳过）：先按本次主题改写纳入标准与 PICOS。**
+> **Step 0（必做，不可跳过）：先按本次主题写好纳入标准与 PICOS。**
 >
-> `review_evidence.py` 与 `review_compose.py` 内置的纳入标准是**上一轮肝脏主题任务留下的
-> 肝细胞癌专用规则**（`POP_IN` / `OTHER_PRIMARY` / PICOS 措辞）。把它用在其他主题上
-> **不会报错**——它只会静默排除几乎全部记录。真实案例：一次「影像组学」检索命中 395 条，
-> 用内置标准后「潜在纳入」只剩 **14 条**（误排除 374 条，占 95%）；综述骨架里还出现了
-> 「经病理或临床确诊的肝细胞癌患者」和 EphA2 受体。
->
-> 为此两个脚本都加了**守卫**：当主题不含肝脏关键词（`hepat` / `hcc` / `liver` / `hepatic` / 肝）
-> 且未提供定制文件时，脚本**直接中止（exit 2）**，并在输出目录生成可编辑的模板：
-> `criteria_template.json` / `picos_template.json`。按模板填写后重跑即可。
-> 只有主题确属肝脏时才会放行，或用 `--allow-default-criteria` / `--allow-default-picos` 显式放行。
+> 脚本**不内置任何主题的判据**：筛选正则只能来自 `--criteria-file`，
+> PICO 表、纳入排除标准与关键词只能来自 `--picos-file`。两份文件缺一，
+> `review_evidence.py` / `review_compose.py` 都会**直接中止（exit 2）**，
+> 并在输出目录生成可编辑模板（`criteria_template.json` / `picos_template.json`），
+> 按模板填写后重跑即可——这是脚本的固有行为，无需也无法绕过。
 >
 > 定制方法、字段含义与完整示例见 **`references/review-criteria.md`**。
 
@@ -400,7 +395,7 @@ deck 因此**不可能**写出与本综述不同的人群描述。
 
 **筛选量级自检**：跑完先看 `eligible` 占 `identified` 的比例。
 若低于一半，多半是判据过紧或主题词没对齐，**先查判据再往下走**，不要直接交付。
-本次正确配置下该比例为 313/395 ≈ 79%。
+正确配置下该比例通常在 70–90%。
 
 四条方法学约束（答复中必须声明）：
 
@@ -734,9 +729,8 @@ Phase 6 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **同样只
 14. **Phase 5/6 自动串联**: 检索完成后先系统综述、再 deck（HTML + PPTX），**默认自动执行**，
     不询问用户；仅当用户本次请求明确不要时才跳过，并在答复中说明。
 15. **纳入标准必须按主题定制**: `--criteria-file` 与 `--picos-file` 是**必填项**。
-    脚本内置的是肝细胞癌专用判据，用于其他主题会静默误排除；
-    非肝脏主题未提供定制文件时脚本**直接中止（exit 2）**并生成模板，
-    这是有意为之的保护，不要用 `--allow-default-*` 绕过。
+    脚本不内置任何主题判据，任何主题未提供文件都会**直接中止（exit 2）**
+    并生成模板——这是脚本的固有行为，不是需要绕过的检查。
     跑完先核对 `eligible / identified` 比例（正常约 80%，过低说明判据没对齐）。
 16. **PICOS 随证据底座传递**: `--picos-file` 的内容会写入 `review_evidence.json` 的
     `meta.picos`，deck 的 M13 页直接读它。**不要**另建一份给 deck 用的 PICOS 副本，
@@ -770,10 +764,10 @@ Phase 6 的 `deck_content.py` / `deck_build.py` / `deck_validate.py` **同样只
 | `tail` 后看不到统计 | `tail` 会截掉开头统计段；勿截断或改读 CSV 自行统计 |
 | 分桶占比合计超 100% | 属正常（可多重归类），需在报告中标注口径 |
 | 聚类关键词虚高 | 检查子串陷阱，短词加 `\b`（如 `spect`→`\bspect\b`） |
-| `[review_evidence] 已中止：…非肝脏主题`（exit 2） | 正常保护。按生成的 `criteria_template.json` 填写后加 `--criteria-file` 重跑 |
-| `[review_compose] 已中止：…肝细胞癌 PICOS`（exit 2） | 同上，改填 `picos_template.json` 后加 `--picos-file` |
+| `[review_evidence] 已中止：未提供 --criteria-file / --picos-file`（exit 2） | 预期行为：脚本不内置判据。按生成的 `criteria_template.json` / `picos_template.json` 填写后重跑 |
+| `[review_compose] 已中止：未提供 --picos-file`（exit 2） | 同上，改填 `picos_template.json` 后重跑 |
 | 综述里出现与主题无关的疾病名/受体名 | 内置肝细胞癌 PICOS 泄漏。补 `--picos-file`，并重跑 5.2 |
-| 「潜在纳入」数量异常少（< 检索量一半） | 判据未按主题定制，被静默误排除；先查 `criteria.json` |
+| 「潜在纳入」数量异常少（< 检索量一半） | 判据过紧或主题词没对齐（如 `pop_in` 太窄）；先查 `criteria.json` |
 | R14 表编号不连续 / 表号引用悬空 | 结果表缺 `**表 N　标题**` 表题；检查 compose 是否漏发 caption |
 | R20 PRISMA 核对表指向不符 | 核对表定位映射与正文表号脱节；表号须统一由 `T_*` 常量派生 |
 | 排版后表格编号与附录引用对不上 | 渲染器按位置重排了表号；改为向前取表题、保留原编号 |
